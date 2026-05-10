@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teplodarbot"
+version = "0.1.0"
+description = "Ingestion pipeline for Teplodar knowledge base"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy>=2.0.0",
+    "lxml>=4.9.0",
+    "httpx>=0.24.0",
+    "selectolax>=0.3.0",
+    "pypdf>=3.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "click>=8.0.0",
+    "tenacity>=8.0.0",
+    "ocrmypdf>=16.0.0",
+    "pymorphy3>=1.0.0",
+    "pymorphy3-dicts-ru>=1.0.0",
+    # RAG dependencies
+    "sentence-transformers>=2.0.0",
+    "sqlite-vec>=0.1.0",
+    "transformers>=4.30.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0.0",
+    "langchain-text-splitters>=0.2.0"
+]
+
+[tool.setuptools]
+packages = ["src"]
+
+[project.scripts]
+ingest-yml = "scripts.ingest_yml:main"
+scrape-products = "scripts.scrape_products:main"
+parse-pdfs = "scripts.parse_pdfs:main"
+ocr-pdfs = "scripts.ocr_pdfs:main"

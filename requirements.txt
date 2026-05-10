@@ -1,0 +1,31 @@
+# Runtime dependencies for bot + admin (no ingestion deps).
+# Local development still uses pyproject.toml.
+
+# Core
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+click>=8.0.0
+pyyaml>=6.0.0
+httpx>=0.24.0
+tenacity>=8.0.0
+
+# Telegram bot
+aiogram>=3.0.0
+
+# Admin web (FastAPI + SPA)
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+python-multipart>=0.0.5
+
+# RAG / FAQ semantic matching
+numpy>=1.24.0
+sentence-transformers>=2.0.0
+transformers>=4.30.0
+sqlite-vec>=0.1.0
+rank-bm25>=0.2.0
+langchain-text-splitters>=0.2.0
+
+# Anthropic SDK (for AnswerGenerator mode="api")
+anthropic>=0.30.0

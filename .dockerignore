@@ -1,0 +1,32 @@
+# Virtual envs (heavy, rebuilt in image)
+venv/
+.venv/
+
+# Built frontend (rebuilt in image stage 1)
+admin/frontend/dist/
+admin/frontend/node_modules/
+
+# Data is mounted as volume — not baked into image
+data/teplodar.db
+data/pdfs/
+data/embeddings_*.npy
+data/metadata_*.pkl
+data/feedback.jsonl
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Secrets
+.env
+
+# Logs
+*.log
+logs/

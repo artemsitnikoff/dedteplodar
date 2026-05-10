@@ -1,0 +1,1 @@
+"""FastAPI admin interface for Teplodar RAG knowledge base."""

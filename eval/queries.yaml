@@ -1,0 +1,166 @@
+# Eval queries для Teplodar bot RAG system
+# Формат:
+#   - id: уникальный номер
+#     question: что спрашиваем
+#     expected: список ожидаемых матчей (любой из них в top-K = hit)
+#       - chunk_type: 'product' | 'pdf' | any
+#         product_id: <id> (опционально)
+#         document_id: <id> (опционально)
+#         category_id: <id> (опционально)
+#         contains: список ключевых слов, которые должны быть в чанке (опц)
+#     notes: для людей
+
+queries:
+  # Точные данные товаров
+  - id: 1
+    question: "сколько весит печь Кадриль"
+    expected:
+      - chunk_type: product
+        product_id: 2648
+        contains: ["80 кг"]
+    notes: "Печь-камин Кадриль, вес 80 кг есть в параметрах"
+
+  - id: 2
+    question: "диаметр дымохода у печи Кадриль"
+    expected:
+      - chunk_type: product
+        product_id: 2648
+        contains: ["150 мм"]
+    notes: "Диаметр дымохода 150 мм в параметрах"
+
+  - id: 3
+    question: "из какого материала сделана Кадриль"
+    expected:
+      - chunk_type: product
+        product_id: 2648
+        contains: ["Нержавеющая сталь"]
+    notes: "Материал указан в параметрах"
+
+  - id: 4
+    question: "топливо для печи Танго"
+    expected:
+      - chunk_type: product
+        product_id: 2656
+        contains: ["Дрова"]
+    notes: "Печь-камин Танго работает на дровах"
+
+  - id: 5
+    question: "какие дополнительные функции у Кадриль"
+    expected:
+      - chunk_type: product
+        product_id: 2648
+        contains: ["Варочная плита", "Режим длительного горения"]
+    notes: "Дополнительные функции в параметрах"
+
+  # Описательные запросы по категориям
+  - id: 6
+    question: "печь для бани на дровах"
+    expected:
+      - chunk_type: product
+        category_id: 562
+    notes: "Любая печь из категории банных печей"
+
+  - id: 7
+    question: "газовая печь для бани"
+    expected:
+      - chunk_type: product
+        product_id: 2987
+        contains: ["КомПАР", "газовая"]
+    notes: "КомПАР-50 - газовая печь для бани"
+
+  - id: 8
+    question: "дровяная печь для сауны Русь"
+    expected:
+      - chunk_type: product
+        contains: ["Русь"]
+    notes: "Серия печей Русь для бани"
+
+  - id: 9
+    question: "отопительная печь камин"
+    expected:
+      - chunk_type: product
+        contains: ["печь-камин", "отопительн"]
+    notes: "Печи-камины для отопления"
+
+  - id: 10
+    question: "печь с варочной плитой"
+    expected:
+      - chunk_type: product
+        contains: ["Варочная плита"]
+    notes: "Печи с возможностью готовки"
+
+  # Содержание PDF (как установить, как обслуживать, безопасность)
+  - id: 11
+    question: "как установить печь Кадриль"
+    expected:
+      - chunk_type: pdf
+        document_id: 3
+        contains: ["монтаж", "установк", "эксплуатаци"]
+    notes: "Руководство по эксплуатации Кадриль"
+
+  - id: 12
+    question: "инструкция по эксплуатации Русь"
+    expected:
+      - chunk_type: pdf
+        document_id: 8
+        contains: ["эксплуатаци", "руководство"]
+    notes: "Руководство эксплуатации РУСЬ"
+
+  - id: 13
+    question: "техническое обслуживание печи"
+    expected:
+      - chunk_type: pdf
+        contains: ["обслуживание", "техническ"]
+    notes: "Любой документ с инструкциями по обслуживанию"
+
+  - id: 14
+    question: "безопасность при использовании печи"
+    expected:
+      - chunk_type: pdf
+        contains: ["безопасност", "осторожно"]
+    notes: "Разделы о безопасности в руководствах"
+
+  - id: 15
+    question: "особенности конструкции печи Танго"
+    expected:
+      - chunk_type: pdf
+        document_id: 4
+        contains: ["конструкци", "особенност"]
+    notes: "Руководство по эксплуатации Танго"
+
+  # Дополнительные запросы на общие темы
+  - id: 16
+    question: "каталог печей 2025"
+    expected:
+      - chunk_type: pdf
+        document_id: 1
+        contains: ["КАТАЛОГ", "2025"]
+    notes: "Каталог продукции завода"
+
+  - id: 17
+    question: "дымоходы для печи"
+    expected:
+      - chunk_type: product
+        category_id: 564
+    notes: "Товары из категории дымоходов"
+
+  - id: 18
+    question: "запчасти для банных печей"
+    expected:
+      - chunk_type: product
+        category_id: 1008
+    notes: "Комплектующие для банных печей"
+
+  - id: 19
+    question: "печь со стеклянной дверцей"
+    expected:
+      - chunk_type: product
+        contains: ["Со стеклом", "стеклянн"]
+    notes: "Печи со стеклянными дверцами"
+
+  - id: 20
+    question: "длительное горение дров"
+    expected:
+      - chunk_type: product
+        contains: ["длительного горения", "режим"]
+    notes: "Печи с режимом длительного горения"
