@@ -2,6 +2,7 @@
 import { ref, onMounted, inject } from 'vue'
 import { api } from '@/api/index.js'
 import AjaxFrog from '@/components/AjaxFrog.vue'
+import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
 
 const toast = inject('toast')
 
@@ -18,36 +19,6 @@ async function loadDataset() {
   } finally {
     datasetLoading.value = false
   }
-}
-
-function categoryBadgeClass(cat) {
-  return {
-    'подбор': 'cat-selection',
-    'характеристики': 'cat-specs',
-    'установка': 'cat-install',
-    'компания': 'cat-company',
-    'дилер': 'cat-dealer',
-  }[cat] || ''
-}
-
-function qtypeCls(qt) {
-  return {
-    RAG_PRODUCT: 'qt-rag',
-    FAQ_COMPANY: 'qt-ref',
-    FAQ_DEALER: 'qt-dealer',
-    FAQ_EXACT: 'qt-faq',
-    ERROR: 'qt-error',
-  }[qt] || ''
-}
-
-function qtypeLabel(qt) {
-  return {
-    RAG_PRODUCT: 'RAG',
-    FAQ_COMPANY: 'О компании',
-    FAQ_DEALER: 'Дилер',
-    FAQ_EXACT: 'FAQ',
-    ERROR: 'Ошибка',
-  }[qt] || qt || '—'
 }
 
 onMounted(loadDataset)

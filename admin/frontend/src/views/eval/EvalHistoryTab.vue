@@ -8,6 +8,8 @@ import {
 import AjaxFrog from '@/components/AjaxFrog.vue'
 import RunSummaryCard from '@/components/eval/RunSummaryCard.vue'
 import EvalResultRow from '@/components/eval/EvalResultRow.vue'
+import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
+import { computeRunStats } from '@/utils/evalStats.js'
 
 const toast = inject('toast')
 
@@ -96,61 +98,13 @@ function toggleAnswer(qid) {
 
 async function loadAnswer(runId, questionId) {
   try {
-    // FIXME: Use dedicated answer endpoint when backend is ready
-    let answer
-    try {
-      const res = await api.getEvalAnswer(runId, questionId)
-      answer = res.data.answer
-    } catch {
-      // Fallback: answer should already be in the result from getEvalRun
-      const result = expandedRunData.value?.results?.find(r => r.question_id === questionId)
-      if (result?.answer) {
-        return // Answer already loaded
-      }
-      throw new Error('Answer not available')
-    }
-
-    // Update the result in expandedRunData.value.results
-    if (expandedRunData.value?.results) {
-      const result = expandedRunData.value.results.find(r => r.question_id === questionId)
-      if (result) {
-        result.answer = answer
-      }
+    const { data } = await api.getEvalAnswer(runId, questionId)
+    const result = expandedRunData.value?.results?.find(r => r.question_id === questionId)
+    if (result) {
+      result.answer = data.answer
     }
   } catch {
     toast('Ошибка загрузки ответа', 'error')
-  }
-}
-
-function computeRunStats(run, results) {
-  if (!run || !results) return null
-  const scoredResults = results.filter(r => r.top_score !== null && r.top_score !== undefined)
-  const scores = scoredResults.map(r => r.top_score)
-  const min = scores.length ? Math.min(...scores) : null
-  const max = scores.length ? Math.max(...scores) : null
-  const byCategory = {}
-  for (const r of results) {
-    if (!byCategory[r.category]) byCategory[r.category] = { total: 0, scored: 0, sum: 0 }
-    byCategory[r.category].total++
-    if (r.top_score !== null && r.top_score !== undefined) {
-      byCategory[r.category].scored++
-      byCategory[r.category].sum += r.top_score
-    }
-  }
-  return {
-    quality: run.quality_score,
-    avg: run.avg_score,
-    typeAcc: run.type_accuracy,
-    errorCount: run.error_count ?? 0,
-    avgLatency: run.avg_latency_ms,
-    deltaQuality: run.delta_quality,
-    deltaAvg: run.delta_avg_score,
-    deltaTypeAcc: run.delta_type_accuracy,
-    previousRunId: run.previous_run_id,
-    min, max,
-    count: scoredResults.length,
-    total: results.length,
-    byCategory,
   }
 }
 
@@ -180,36 +134,6 @@ function formatDate(iso) {
   const d = new Date(iso)
   return d.toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
     ' ' + d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
-}
-
-function categoryBadgeClass(cat) {
-  return {
-    'подбор': 'cat-selection',
-    'характеристики': 'cat-specs',
-    'установка': 'cat-install',
-    'компания': 'cat-company',
-    'дилер': 'cat-dealer',
-  }[cat] || ''
-}
-
-function qtypeCls(qt) {
-  return {
-    RAG_PRODUCT: 'qt-rag',
-    FAQ_COMPANY: 'qt-ref',
-    FAQ_DEALER: 'qt-dealer',
-    FAQ_EXACT: 'qt-faq',
-    ERROR: 'qt-error',
-  }[qt] || ''
-}
-
-function qtypeLabel(qt) {
-  return {
-    RAG_PRODUCT: 'RAG',
-    FAQ_COMPANY: 'О компании',
-    FAQ_DEALER: 'Дилер',
-    FAQ_EXACT: 'FAQ',
-    ERROR: 'Ошибка',
-  }[qt] || qt || '—'
 }
 
 onMounted(loadRuns)

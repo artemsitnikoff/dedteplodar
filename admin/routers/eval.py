@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,15 @@ from sqlalchemy.orm import Session, defer
 
 from admin.dependencies import get_db
 from admin.eval_preset import EVAL_DATASET
+from admin.schemas.eval import (
+    AnswerResponse,
+    CompareResponse,
+    DatasetResponse,
+    RunDetailResponse,
+    RunStartResponse,
+    RunSummary,
+    RunsListResponse,
+)
 from src.core.database import SessionLocal
 from src.eval.models import EvalResult, EvalRun
 
@@ -77,12 +87,10 @@ async def get_eval_generator():
 
 # ─────────────────────────────────────────────── background task
 
-import os as _os
-
-# Parallel Claude CLI subprocesses. Default lowered to 2 — a full Claude CLI
-# call pegs a CPU core, so on small VPS 4 workers starve the HTTP server.
-# Bump via EVAL_WORKERS env on a beefier host.
-_EVAL_WORKERS = int(_os.getenv("EVAL_WORKERS", "2"))
+# Parallel Claude CLI subprocesses. On a small VPS each call pegs a core
+# for ~15-30s, so 4 workers starve uvicorn. Default 2, bump via env if host
+# has more cores to spare.
+_EVAL_WORKERS = int(os.getenv("EVAL_WORKERS", "2"))
 
 
 def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> dict:
@@ -314,7 +322,12 @@ def _serialise_result(r: EvalResult) -> dict[str, Any]:
 
 
 def _serialise_result_without_answer(r: EvalResult) -> dict[str, Any]:
-    """Serialize result without the heavy answer field."""
+    """Serialize result without the heavy answer field.
+
+    DO NOT touch r.answer here — the SELECT defer()s it, so attribute
+    access would trigger a per-row lazy-load (N+1). Frontend checks
+    `result.answer` directly after on-demand fetch via /results/{qid}/answer.
+    """
     return {
         "id": r.id,
         "question_id": r.question_id,
@@ -326,19 +339,18 @@ def _serialise_result_without_answer(r: EvalResult) -> dict[str, Any]:
         "chunks_used": r.chunks_used,
         "latency_ms": r.latency_ms,
         "error": r.error,
-        "has_answer": r.answer is not None,
     }
 
 
 # ─────────────────────────────────────────────── endpoints
 
-@router.get("/dataset")
+@router.get("/dataset", response_model=DatasetResponse)
 async def get_dataset():
     """Return the full list of 50 preset questions (no DB access)."""
     return {"items": EVAL_DATASET, "total": len(EVAL_DATASET)}
 
 
-@router.post("/run", status_code=202)
+@router.post("/run", status_code=202, response_model=RunStartResponse)
 async def start_run(
     background_tasks: BackgroundTasks,
     note: str | None = None,
@@ -364,7 +376,7 @@ async def start_run(
     return {"run_id": run_id}
 
 
-@router.get("/runs")
+@router.get("/runs", response_model=RunsListResponse)
 async def list_runs(db: Session = Depends(get_db)):
     """List all past eval runs, newest first, with aggregates and delta vs previous run."""
     rows = db.execute(
@@ -407,7 +419,7 @@ def _delta_vs(cur: dict[str, Any], prev: dict[str, Any] | None, prev_id: int | N
     return out
 
 
-@router.get("/runs/{run_id}/progress")
+@router.get("/runs/{run_id}/progress", response_model=RunSummary)
 async def get_run_progress(run_id: int, db: Session = Depends(get_db)):
     """Return lightweight run progress info (for frequent polling)."""
     run = db.get(EvalRun, run_id)
@@ -424,7 +436,7 @@ async def get_run_progress(run_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/runs/{run_id}")
+@router.get("/runs/{run_id}", response_model=RunDetailResponse)
 async def get_run(run_id: int, db: Session = Depends(get_db)):
     """Return a run with all its results (without answer text), aggregates, and delta vs the immediately preceding run."""
     run = db.get(EvalRun, run_id)
@@ -464,7 +476,7 @@ async def get_run(run_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/runs/{run_id}/results/{question_id}/answer")
+@router.get("/runs/{run_id}/results/{question_id}/answer", response_model=AnswerResponse)
 async def get_result_answer(run_id: int, question_id: int, db: Session = Depends(get_db)):
     """Return answer text for a specific question result."""
     result = db.execute(
@@ -482,7 +494,7 @@ async def get_result_answer(run_id: int, question_id: int, db: Session = Depends
     }
 
 
-@router.get("/runs/{run_id}/compare/{other_run_id}")
+@router.get("/runs/{run_id}/compare/{other_run_id}", response_model=CompareResponse)
 async def compare_runs(run_id: int, other_run_id: int, db: Session = Depends(get_db)):
     """Return a per-question comparison between two runs."""
     run_a = db.get(EvalRun, run_id)

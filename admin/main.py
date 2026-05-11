@@ -14,20 +14,20 @@ from admin.routers import products, categories, documents, chunks, faq, pipeline
 
 # ── HTTP Basic auth on every request (except static assets and health) ───────────────────
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-_ADMIN_PASS = os.getenv("ADMIN_PASS", "admin555")
+_ADMIN_PASS = os.getenv("ADMIN_PASS", "")
 _AUTH_FREE_PATHS = {"/health"}
 _AUTH_FREE_PREFIXES = ("/assets/", "/vite.svg", "/favicon.ico")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Security check: refuse to serve prod with the well-known default password.
-    # Moved out of module-level so pytest collection / `import admin.main`
-    # don't crash; the check only runs when the app actually starts.
-    if _ADMIN_PASS == "admin555" and os.getenv("ADMIN_ALLOW_DEFAULT_PASS") != "1":
+    # Security: refuse to serve without an explicit admin password. No
+    # hard-coded fallback in source — leaking the literal string into the
+    # repo is the exact risk we're guarding against.
+    if not _ADMIN_PASS:
         raise RuntimeError(
-            "Default password detected! Set ADMIN_PASS environment variable or "
-            "set ADMIN_ALLOW_DEFAULT_PASS=1 to allow default password in development."
+            "ADMIN_PASS environment variable is required. Set it before "
+            "starting the admin service (no default is provided)."
         )
     yield
 

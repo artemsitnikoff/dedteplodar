@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, inject } from 'vue'
 import { api } from '@/api/index.js'
 import AjaxFrog from '@/components/AjaxFrog.vue'
+import { qtypeCls, qtypeLabel } from '@/utils/badges.js'
 
 const toast = inject('toast')
 const logs = ref([])
@@ -81,26 +82,6 @@ function feedbackLabel(fb) {
   if (fb === 'bad') return { label: '👎', cls: 'fb-bad' }
   if (fb === 'operator') return { label: '🆘', cls: 'fb-op' }
   return null
-}
-
-function qtypeLabel(qt) {
-  return {
-    RAG_PRODUCT: 'RAG',
-    FAQ_COMPANY: 'О компании',
-    FAQ_DEALER:  'Дилер',
-    FAQ_EXACT:   'FAQ',
-    ERROR:       'Ошибка',
-  }[qt] || qt
-}
-
-function qtypeCls(qt) {
-  return {
-    RAG_PRODUCT: 'qt-rag',
-    FAQ_COMPANY: 'qt-ref',
-    FAQ_DEALER:  'qt-dealer',
-    FAQ_EXACT:   'qt-faq',
-    ERROR:       'qt-error',
-  }[qt] || ''
 }
 
 function formatTs(ts) {

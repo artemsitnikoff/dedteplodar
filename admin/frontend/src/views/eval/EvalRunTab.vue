@@ -4,6 +4,7 @@ import { api } from '@/api/index.js'
 import AjaxFrog from '@/components/AjaxFrog.vue'
 import RunSummaryCard from '@/components/eval/RunSummaryCard.vue'
 import EvalResultRow from '@/components/eval/EvalResultRow.vue'
+import { computeRunStats } from '@/utils/evalStats.js'
 
 const toast = inject('toast')
 
@@ -46,9 +47,15 @@ async function pollRun(runId) {
       stopPolling()
       isRunning.value = false
 
-      // Once finished, fetch the full results (with answers) one time
-      const detail = await api.getEvalRun(runId)
-      currentRun.value = detail.data
+      // Run is finished — pull full results once. Wrapped so a network blip
+      // on this single request doesn't leave the user with "Eval завершён"
+      // and an empty table.
+      try {
+        const detail = await api.getEvalRun(runId)
+        currentRun.value = detail.data
+      } catch {
+        toast('Не удалось загрузить детали прогона — обнови страницу', 'error')
+      }
 
       emit('run-completed')
       toast(data.status === 'done' ? 'Eval завершён' : 'Eval завершился с ошибкой',
@@ -87,38 +94,6 @@ const runProgress = computed(() => {
 
 const currentResults = computed(() => currentRun.value?.results ?? [])
 
-function computeRunStats(run, results) {
-  if (!run || !results) return null
-  const scoredResults = results.filter(r => r.top_score !== null && r.top_score !== undefined)
-  const scores = scoredResults.map(r => r.top_score)
-  const min = scores.length ? Math.min(...scores) : null
-  const max = scores.length ? Math.max(...scores) : null
-  const byCategory = {}
-  for (const r of results) {
-    if (!byCategory[r.category]) byCategory[r.category] = { total: 0, scored: 0, sum: 0 }
-    byCategory[r.category].total++
-    if (r.top_score !== null && r.top_score !== undefined) {
-      byCategory[r.category].scored++
-      byCategory[r.category].sum += r.top_score
-    }
-  }
-  return {
-    quality: run.quality_score,
-    avg: run.avg_score,
-    typeAcc: run.type_accuracy,
-    errorCount: run.error_count ?? 0,
-    avgLatency: run.avg_latency_ms,
-    deltaQuality: run.delta_quality,
-    deltaAvg: run.delta_avg_score,
-    deltaTypeAcc: run.delta_type_accuracy,
-    previousRunId: run.previous_run_id,
-    min, max,
-    count: scoredResults.length,
-    total: results.length,
-    byCategory,
-  }
-}
-
 const runSummary = computed(() => computeRunStats(currentRun.value, currentResults.value))
 
 function toggleAnswer(qid) {
@@ -130,26 +105,10 @@ function toggleAnswer(qid) {
 
 async function loadAnswer(runId, questionId) {
   try {
-    // FIXME: Use dedicated answer endpoint when backend is ready
-    let answer
-    try {
-      const res = await api.getEvalAnswer(runId, questionId)
-      answer = res.data.answer
-    } catch {
-      // Fallback: answer should already be in the result from getEvalRun
-      const result = currentRun.value?.results?.find(r => r.question_id === questionId)
-      if (result?.answer) {
-        return // Answer already loaded
-      }
-      throw new Error('Answer not available')
-    }
-
-    // Update the result in currentRun.value.results
-    if (currentRun.value?.results) {
-      const result = currentRun.value.results.find(r => r.question_id === questionId)
-      if (result) {
-        result.answer = answer
-      }
+    const { data } = await api.getEvalAnswer(runId, questionId)
+    const result = currentRun.value?.results?.find(r => r.question_id === questionId)
+    if (result) {
+      result.answer = data.answer
     }
   } catch {
     toast('Ошибка загрузки ответа', 'error')

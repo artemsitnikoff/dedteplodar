@@ -1,5 +1,6 @@
 <script setup>
 import { scoreColor } from '@/utils/format.js'
+import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
 
 const props = defineProps({
   result: {
@@ -13,37 +14,6 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['toggle', 'load-answer'])
-
-// Helper functions (copied from original EvalView)
-function categoryBadgeClass(cat) {
-  return {
-    'подбор': 'cat-selection',
-    'характеристики': 'cat-specs',
-    'установка': 'cat-install',
-    'компания': 'cat-company',
-    'дилер': 'cat-dealer',
-  }[cat] || ''
-}
-
-function qtypeCls(qt) {
-  return {
-    RAG_PRODUCT: 'qt-rag',
-    FAQ_COMPANY: 'qt-ref',
-    FAQ_DEALER: 'qt-dealer',
-    FAQ_EXACT: 'qt-faq',
-    ERROR: 'qt-error',
-  }[qt] || ''
-}
-
-function qtypeLabel(qt) {
-  return {
-    RAG_PRODUCT: 'RAG',
-    FAQ_COMPANY: 'О компании',
-    FAQ_DEALER: 'Дилер',
-    FAQ_EXACT: 'FAQ',
-    ERROR: 'Ошибка',
-  }[qt] || qt || '—'
-}
 
 function handleRowClick() {
   emit('toggle', props.result.question_id)

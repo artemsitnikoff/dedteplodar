@@ -1,6 +1,7 @@
 """Pipeline API router for background tasks and statistics."""
 
 import time
+import threading
 import uuid
 import subprocess
 import sys
@@ -28,17 +29,20 @@ _tasks: Dict[str, Dict[str, Any]] = {}
 _stats_cache: Optional[Dict[str, Any]] = None
 _stats_cache_timestamp: float = 0
 _STATS_CACHE_TTL = 20  # seconds
+_stats_cache_lock = threading.Lock()
 
 
 def _get_stats_cached(db: Session) -> PipelineStats:
-    """Get pipeline stats with TTL cache."""
+    """Get pipeline stats with TTL cache. Thread-safe under uvicorn workers."""
     global _stats_cache, _stats_cache_timestamp
 
-    now = time.time()
-    if _stats_cache and (now - _stats_cache_timestamp) < _STATS_CACHE_TTL:
-        return PipelineStats(**_stats_cache)
+    # Fast path — read under lock, copy out
+    with _stats_cache_lock:
+        if _stats_cache and (time.time() - _stats_cache_timestamp) < _STATS_CACHE_TTL:
+            return PipelineStats(**_stats_cache)
 
-    # Cache miss - compute fresh stats
+    # Cache miss — compute fresh stats outside the lock so concurrent
+    # readers don't block on a SQLite roundtrip.
     products_count = db.execute(select(func.count(Product.id))).scalar()
     categories_count = db.execute(select(func.count(Category.id))).scalar()
     documents_count = db.execute(select(func.count(Document.id))).scalar()
@@ -64,8 +68,8 @@ def _get_stats_cached(db: Session) -> PipelineStats:
         ).scalar_one_or_none()
         last_indexed = last_chunk.isoformat() if last_chunk else None
 
-    # Cache the result
-    _stats_cache = {
+    # Cache the result under lock (atomic swap)
+    fresh = {
         "products": products_count,
         "categories": categories_count,
         "documents": documents_count,
@@ -73,9 +77,11 @@ def _get_stats_cached(db: Session) -> PipelineStats:
         "index_versions": index_versions,
         "last_indexed": last_indexed,
     }
-    _stats_cache_timestamp = now
+    with _stats_cache_lock:
+        _stats_cache = fresh
+        _stats_cache_timestamp = time.time()
 
-    return PipelineStats(**_stats_cache)
+    return PipelineStats(**fresh)
 
 
 def _cleanup_old_tasks():
