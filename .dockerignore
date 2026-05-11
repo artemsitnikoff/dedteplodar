@@ -6,12 +6,11 @@ venv/
 admin/frontend/dist/
 admin/frontend/node_modules/
 
-# Data is mounted as volume — not baked into image
-data/teplodar.db
-data/pdfs/
-data/embeddings_*.npy
-data/metadata_*.pkl
-data/feedback.jsonl
+# Mounted as volumes at runtime — never bake into image.
+# `data/` is a symlink on prod (→ ArkadiyJarvis/data) so we MUST exclude it,
+# otherwise COPY brings in a dangling symlink and subsequent mkdir/RUN fails.
+data/
+base/
 
 # Python caches
 __pycache__/

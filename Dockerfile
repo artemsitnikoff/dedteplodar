@@ -30,7 +30,7 @@ COPY . .
 # Pre-built admin SPA from stage 1
 COPY --from=frontend-builder /build/dist /app/admin/frontend/dist
 
-RUN mkdir -p base data
+# base/ and data/ are mounted as volumes at runtime — no need to mkdir here.
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
