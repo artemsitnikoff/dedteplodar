@@ -2,6 +2,7 @@
 import base64
 import os
 import secrets
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -11,26 +12,34 @@ from fastapi.staticfiles import StaticFiles
 
 from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router
 
-app = FastAPI(
-    title="Teplodar Admin API",
-    description="Admin interface for Teplodar RAG knowledge base",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
 # ── HTTP Basic auth on every request (except static assets and health) ───────────────────
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 _ADMIN_PASS = os.getenv("ADMIN_PASS", "admin555")
 _AUTH_FREE_PATHS = {"/health"}
 _AUTH_FREE_PREFIXES = ("/assets/", "/vite.svg", "/favicon.ico")
 
-# Security check: fail fast if default password is used in production
-if _ADMIN_PASS == "admin555" and os.getenv("ADMIN_ALLOW_DEFAULT_PASS") != "1":
-    raise RuntimeError(
-        "Default password detected! Set ADMIN_PASS environment variable or "
-        "set ADMIN_ALLOW_DEFAULT_PASS=1 to allow default password in development."
-    )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Security check: refuse to serve prod with the well-known default password.
+    # Moved out of module-level so pytest collection / `import admin.main`
+    # don't crash; the check only runs when the app actually starts.
+    if _ADMIN_PASS == "admin555" and os.getenv("ADMIN_ALLOW_DEFAULT_PASS") != "1":
+        raise RuntimeError(
+            "Default password detected! Set ADMIN_PASS environment variable or "
+            "set ADMIN_ALLOW_DEFAULT_PASS=1 to allow default password in development."
+        )
+    yield
+
+
+app = FastAPI(
+    title="Teplodar Admin API",
+    description="Admin interface for Teplodar RAG knowledge base",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
 
 
 def _unauthorized() -> Response:

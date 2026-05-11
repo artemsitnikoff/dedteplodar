@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from admin.dependencies import get_db
 from admin.eval_preset import EVAL_DATASET
@@ -431,8 +431,11 @@ async def get_run(run_id: int, db: Session = Depends(get_db)):
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    # Don't load EvalResult.answer (heavy Text column) — this endpoint never
+    # surfaces it; full answers come from /results/{qid}/answer on demand.
     results = db.execute(
         select(EvalResult)
+        .options(defer(EvalResult.answer))
         .where(EvalResult.run_id == run_id)
         .order_by(EvalResult.question_id)
     ).scalars().all()
@@ -488,22 +491,28 @@ async def compare_runs(run_id: int, other_run_id: int, db: Session = Depends(get
     if run_a is None or run_b is None:
         raise HTTPException(status_code=404, detail="One or both runs not found")
 
+    # Per-question diff data — load only the columns we actually compare.
+    # Skip heavy EvalResult.answer (Text) — we never surface it from this endpoint.
+    cols = (
+        EvalResult.question_id,
+        EvalResult.top_score,
+        EvalResult.actual_type,
+        EvalResult.latency_ms,
+    )
     results_a = {
-        r.question_id: r
-        for r in db.execute(
-            select(EvalResult).where(EvalResult.run_id == run_id)
-        ).scalars().all()
+        row.question_id: row
+        for row in db.execute(
+            select(*cols).where(EvalResult.run_id == run_id)
+        ).all()
     }
     results_b = {
-        r.question_id: r
-        for r in db.execute(
-            select(EvalResult).where(EvalResult.run_id == other_run_id)
-        ).scalars().all()
+        row.question_id: row
+        for row in db.execute(
+            select(*cols).where(EvalResult.run_id == other_run_id)
+        ).all()
     }
 
     questions = []
-    scores_a: list[float] = []
-    scores_b: list[float] = []
     improved = 0
     degraded = 0
     unchanged = 0
@@ -537,11 +546,6 @@ async def compare_runs(run_id: int, other_run_id: int, db: Session = Depends(get
         if type_changed:
             type_changes += 1
 
-        if score_a is not None:
-            scores_a.append(score_a)
-        if score_b is not None:
-            scores_b.append(score_b)
-
         questions.append({
             "id": qid,
             "question": item["question"],
@@ -552,13 +556,14 @@ async def compare_runs(run_id: int, other_run_id: int, db: Session = Depends(get
             "type_changed": type_changed,
         })
 
-    avg_a = round(sum(scores_a) / len(scores_a), 4) if scores_a else None
-    avg_b = round(sum(scores_b) / len(scores_b), 4) if scores_b else None
-
-    # Composite quality scores for both runs, plus delta
+    # avg_score / quality come from the single GROUP-BY aggregate — no second pass
     aggs = _compute_aggregates_batch(db, [run_id, other_run_id])
-    quality_a = aggs.get(run_id, {}).get("quality_score")
-    quality_b = aggs.get(other_run_id, {}).get("quality_score")
+    agg_a = aggs.get(run_id, {})
+    agg_b = aggs.get(other_run_id, {})
+    avg_a = agg_a.get("avg_score")
+    avg_b = agg_b.get("avg_score")
+    quality_a = agg_a.get("quality_score")
+    quality_b = agg_b.get("quality_score")
     quality_delta = (
         round(quality_b - quality_a, 1)
         if quality_a is not None and quality_b is not None
@@ -566,8 +571,8 @@ async def compare_runs(run_id: int, other_run_id: int, db: Session = Depends(get
     )
 
     return {
-        "run_a": _serialise_run(run_a, aggregates=aggs.get(run_id)),
-        "run_b": _serialise_run(run_b, aggregates=aggs.get(other_run_id)),
+        "run_a": _serialise_run(run_a, aggregates=agg_a),
+        "run_b": _serialise_run(run_b, aggregates=agg_b),
         "questions": questions,
         "summary": {
             "avg_score_a": avg_a,
