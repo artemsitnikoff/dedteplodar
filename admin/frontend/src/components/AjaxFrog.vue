@@ -42,4 +42,8 @@ defineProps({
   80%  { transform: rotate(-10deg) translateY(0) scale(1); }
   100% { transform: rotate(-14deg) translateY(0) scale(1); }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .ajax-frog-emoji { animation: none; }
+}
 </style>

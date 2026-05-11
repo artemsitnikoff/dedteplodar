@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { ref } from 'vue'
 
 const client = axios.create({
   baseURL: '/api/v1',
@@ -9,15 +8,15 @@ const client = axios.create({
 })
 
 // Counter of in-flight requests (kept for any future global indicator)
-export const activeRequests = ref(0)
+let activeRequests = 0
 
 const SLOW_MS = 800
 const VERY_SLOW_MS = 2500
 
 client.interceptors.request.use((config) => {
-  activeRequests.value++
+  activeRequests++
   config.metadata = { startedAt: performance.now() }
-  console.log(`[api] → ${config.method?.toUpperCase()} ${config.url}`)
+  if (import.meta.env.DEV) console.log(`[api] → ${config.method?.toUpperCase()} ${config.url}`)
   return config
 })
 
@@ -25,19 +24,21 @@ function logResponse(config, status, label = '') {
   const ms = Math.round(performance.now() - (config?.metadata?.startedAt ?? performance.now()))
   const tag = `[api]${label}`
   const line = `${tag} ← ${status} ${config?.method?.toUpperCase() ?? '?'} ${config?.url ?? '?'}  ${ms}ms`
-  if (ms >= VERY_SLOW_MS) console.error(line + '  ⚠ VERY SLOW')
-  else if (ms >= SLOW_MS) console.warn(line + '  ⚠ slow')
-  else console.log(line)
+  if (import.meta.env.DEV) {
+    if (ms >= VERY_SLOW_MS) console.error(line + '  ⚠ VERY SLOW')
+    else if (ms >= SLOW_MS) console.warn(line + '  ⚠ slow')
+    else console.log(line)
+  }
 }
 
 client.interceptors.response.use(
   (resp) => {
-    if (activeRequests.value > 0) activeRequests.value--
+    if (activeRequests > 0) activeRequests--
     logResponse(resp.config, resp.status)
     return resp
   },
   (err) => {
-    if (activeRequests.value > 0) activeRequests.value--
+    if (activeRequests > 0) activeRequests--
     const status = err.response?.status ?? 'ERR'
     logResponse(err.config, status, ' FAIL')
     return Promise.reject(err)
@@ -106,6 +107,8 @@ export const api = {
   runEvalDataset: (note = null) => client.post('/eval/run', null, { params: note ? { note } : {} }),
   getEvalRuns: () => client.get('/eval/runs'),
   getEvalRun: (id) => client.get(`/eval/runs/${id}`),
+  getEvalRunProgress: (id) => client.get(`/eval/runs/${id}/progress`),
+  getEvalAnswer: (runId, questionId) => client.get(`/eval/runs/${runId}/results/${questionId}/answer`),
   compareEvalRuns: (id_a, id_b) => client.get(`/eval/runs/${id_a}/compare/${id_b}`),
   deleteEvalRun: (id) => client.delete(`/eval/runs/${id}`),
 }

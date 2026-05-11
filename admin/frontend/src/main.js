@@ -3,17 +3,17 @@ import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import '@/assets/tokens.css'
 
-// Views
-import DashboardView from '@/views/DashboardView.vue'
-import ProductsView from '@/views/ProductsView.vue'
-import ProductEditView from '@/views/ProductEditView.vue'
-import CategoriesView from '@/views/CategoriesView.vue'
-import DocumentsView from '@/views/DocumentsView.vue'
-import ChunksView from '@/views/ChunksView.vue'
-import FaqView from '@/views/FaqView.vue'
-import PipelineView from '@/views/PipelineView.vue'
-import JournalView from '@/views/JournalView.vue'
-import FaqEntriesView from '@/views/FaqEntriesView.vue'
+// Lazy-loaded views for better performance
+const DashboardView = () => import('@/views/DashboardView.vue')
+const ProductsView = () => import('@/views/ProductsView.vue')
+const ProductEditView = () => import('@/views/ProductEditView.vue')
+const CategoriesView = () => import('@/views/CategoriesView.vue')
+const DocumentsView = () => import('@/views/DocumentsView.vue')
+const ChunksView = () => import('@/views/ChunksView.vue')
+const FaqView = () => import('@/views/FaqView.vue')
+const PipelineView = () => import('@/views/PipelineView.vue')
+const JournalView = () => import('@/views/JournalView.vue')
+const FaqEntriesView = () => import('@/views/FaqEntriesView.vue')
 
 const routes = [
   { path: '/', name: 'dashboard', component: DashboardView },
