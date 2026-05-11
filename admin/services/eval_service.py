@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────── generator singleton
 
 _generator = None
-_generator_lock = asyncio.Lock()
+_generator_lock = None
 
 # Parallel Claude CLI subprocesses. On a small VPS each call pegs a core
 # for ~15-30s, so 4 workers starve uvicorn. Default 2, bump via env if host
@@ -58,8 +58,10 @@ def _init_generator_sync():
 
 async def get_eval_generator():
     """Return the module-level generator singleton, initialising it on first call."""
-    global _generator
+    global _generator, _generator_lock
     if _generator is None:
+        if _generator_lock is None:
+            _generator_lock = asyncio.Lock()
         async with _generator_lock:
             # Double-check inside the lock to avoid double-init
             if _generator is None:
@@ -258,7 +260,9 @@ def run_eval_background(run_id: int) -> None:
     """Execute the full eval dataset with parallel workers; called via BackgroundTasks."""
     global _generator
     if _generator is None:
-        _generator = _init_generator_sync()
+        raise RuntimeError(
+            "Generator not initialized. Call get_eval_generator() before background task."
+        )
     generator = _generator
 
     db_lock = threading.Lock()

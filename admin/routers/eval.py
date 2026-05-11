@@ -93,7 +93,8 @@ async def list_runs(db: Session = Depends(get_db)):
     for idx, run in enumerate(rows):
         agg = aggregates_by_id[run.id]
         prev = rows[idx + 1] if idx + 1 < len(rows) else None
-        merged = {**agg, **compute_delta_vs(agg, aggregates_by_id.get(prev.id) if prev else None, prev.id if prev else None)}
+        prev_agg = aggregates_by_id.get(prev.id) if prev else None
+        merged = {**agg, **compute_delta_vs(agg, prev_agg, prev.id if prev else None)}
         items.append(serialise_run(run, aggregates=merged))
 
     return {"items": items}
