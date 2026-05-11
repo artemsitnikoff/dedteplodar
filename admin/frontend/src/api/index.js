@@ -6,8 +6,6 @@ const client = axios.create({
   headers: {
     'Content-Type': 'application/json'
   },
-  // Send Basic-auth cookie/credentials issued by the browser prompt
-  withCredentials: true,
 })
 
 // Global counter of in-flight requests — used by <AjaxFrog> to dance

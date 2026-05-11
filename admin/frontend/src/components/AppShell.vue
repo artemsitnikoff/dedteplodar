@@ -11,14 +11,13 @@ import AjaxFrog from '@/components/AjaxFrog.vue'
         <span class="topbar-emoji">🔥</span>
         <span class="topbar-text">ДедТеплодар</span>
       </div>
-      <div class="topbar-right">
-        <AjaxFrog />
-      </div>
     </header>
     <main class="main-content">
       <RouterView />
     </main>
   </div>
+  <!-- Global loading mascot — fixed-position, only visible while AJAX in flight -->
+  <AjaxFrog />
 </template>
 
 <style scoped>
