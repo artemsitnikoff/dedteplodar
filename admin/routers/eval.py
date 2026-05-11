@@ -99,9 +99,6 @@ async def list_runs(db: Session = Depends(get_db)):
     return {"items": items}
 
 
-# ─────────────────────────────────────────────── endpoints
-
-
 @router.get("/runs/{run_id}/progress", response_model=RunSummary)
 async def get_run_progress(run_id: int, db: Session = Depends(get_db)):
     """Return lightweight run progress info (for frequent polling)."""
