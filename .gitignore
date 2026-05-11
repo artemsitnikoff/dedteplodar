@@ -45,9 +45,9 @@ data/
 admin/frontend/dist/
 admin/frontend/node_modules/
 
-# Logs
+# Logs (only top-level logs/ dir, NOT src/logs which is a Python package)
 *.log
-logs/
+/logs/
 
 # IDE
 .vscode/
