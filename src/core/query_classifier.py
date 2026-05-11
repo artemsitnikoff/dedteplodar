@@ -73,7 +73,7 @@ _RE_DEALER  = [re.compile(p, re.I) for p in _FAQ_DEALER_PATTERNS]
 # If any of these match, force RAG_PRODUCT regardless of company/dealer patterns.
 # Catches questions like "гарантия на Спутник-3" or "доставка Куппера".
 _RAG_OVERRIDE_PATTERNS = [
-    # Known product families
+    # Known product families (sample names from the catalog)
     r"\bспутник\b",
     r"\bкуппер\b",
     r"\bкузбасс\b",
@@ -87,6 +87,17 @@ _RAG_OVERRIDE_PATTERNS = [
     r"\bпанорама\b",
     r"\bпрофи\b",
     r"\bтарий\b",
+    r"\bметеор\b",
+    r"\bвертикаль\b",
+    r"\bпечурка\b",
+    r"\bкадриль\b",
+    r"\bтанго\b",
+    r"\bрумба\b",
+    r"\bсиеста\b",
+    r"\bкомпар\b",
+    r"\bтоп[\-\s]?драйв\b",
+    r"\bтоп[\-\s]?модель\b",
+    # Generic product nouns
     r"\bкамин\b",
     r"\bпечь\b",  r"\bпечи\b",  r"\bпечей\b",
     r"\bкотёл\b", r"\bкотел\b", r"\bкотлы\b", r"\bкотла\b",
@@ -95,11 +106,19 @@ _RAG_OVERRIDE_PATTERNS = [
     r"\bбойлер\b",
     r"\bтэн\b",
     r"\bовк\b",   # ОВК серия котлов
-    # Model-number pattern: латиница/кириллица + цифра (Спутник-3, ОВК-9, КВт)
-    r"[а-яёА-ЯЁa-zA-Z]-?\d",
+    # Model-number patterns:
+    #  - letter + dash + digit  → Спутник-3, ОВК-9, Куппер-14
+    r"[а-яёА-ЯЁa-zA-Z]-\d",
+]
+
+# Case-sensitive patterns — must NOT use re.I, otherwise "доставка 30 дней"
+# matches a model-name heuristic. Capitalized RU word + space + 2+ digits.
+_RAG_OVERRIDE_CASE_PATTERNS = [
+    r"\b[А-ЯЁ][а-яё]{2,}\s+\d{2,}\b",  # "Норма 26", "Метеор 150", "Утёс 100"
 ]
 
 _RE_RAG_OVERRIDE = [re.compile(p, re.I) for p in _RAG_OVERRIDE_PATTERNS]
+_RE_RAG_OVERRIDE_CASE = [re.compile(p) for p in _RAG_OVERRIDE_CASE_PATTERNS]
 
 
 def classify(query: str) -> QueryType:
@@ -109,6 +128,9 @@ def classify(query: str) -> QueryType:
     # If query mentions a specific product/model → always RAG, even if company
     # keywords (гарантия, доставка…) are also present.
     for pat in _RE_RAG_OVERRIDE:
+        if pat.search(q):
+            return QueryType.RAG_PRODUCT
+    for pat in _RE_RAG_OVERRIDE_CASE:
         if pat.search(q):
             return QueryType.RAG_PRODUCT
 

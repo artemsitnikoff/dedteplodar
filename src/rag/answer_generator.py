@@ -254,8 +254,12 @@ def _enrich_chunks_with_product_urls(session: Session, results: list[SearchResul
                 r.chunk_text = f"{r.chunk_text}\nСсылка: {url}"
 
 
-def _build_full_prompt(query: str, chunks: list[SearchResult]) -> str:
-    """Combine system prompt + FAQ + RAG chunks + user query into one string for CLI."""
+def _build_full_prompt(
+    query: str,
+    chunks: list[SearchResult],
+    dealer_block: str | None = None,
+) -> str:
+    """Combine system prompt + FAQ + RAG chunks + (optional) dealer info + query."""
     parts = [_SYSTEM_PROMPT, "", _FAQ_TEXT, ""]
     if chunks:
         fragments = "\n\n".join(
@@ -263,6 +267,8 @@ def _build_full_prompt(query: str, chunks: list[SearchResult]) -> str:
             for i, c in enumerate(chunks)
         )
         parts.append(f"Фрагменты из базы знаний:\n{fragments}\n")
+    if dealer_block:
+        parts.append(f"Информация о магазинах в городе:\n{dealer_block}\n")
     parts.append(f"Вопрос: {query}")
     return "\n".join(parts)
 
@@ -423,29 +429,41 @@ class AnswerGenerator:
         if _user_wants_link(query):
             _enrich_chunks_with_product_urls(session, results)
 
+        # Compound-intent merge: if the user names a city, inject the dealer
+        # block alongside the product chunks so a single RAG answer can cover
+        # both "что за товар" and "где купить".
+        dealer_block: str | None = None
+        city = _extract_city(query)
+        if city:
+            matched_city, shops = find_dealers(city)
+            if matched_city and shops:
+                dealer_block = format_dealer_reply(city)
+
         meta = AnswerMeta(
             query_type=QueryType.RAG_PRODUCT.value,
             top_score=results[0].score if results else None,
             chunks_used=len(results),
             reformulated_query=retrieval_query if retrieval_query != query else None,
+            city=matched_city if dealer_block else None,
+            shops_count=len(shops) if dealer_block else 0,
         )
         # Answer uses the original query so the LLM sees natural language
-        answer = "".join(self._call_claude(query, chunks=results))
+        answer = "".join(self._call_claude(query, chunks=results, dealer_block=dealer_block))
         return answer, meta
 
     # ─────────────────────────────────────────────── LLM dispatch
 
-    def _call_claude(self, query: str, chunks: list[SearchResult]) -> Iterator[str]:
+    def _call_claude(self, query: str, chunks: list[SearchResult], dealer_block: str | None = None) -> Iterator[str]:
         if self.mode == "cli":
-            yield from self._call_cli_mode(query, chunks)
+            yield from self._call_cli_mode(query, chunks, dealer_block)
         else:
-            yield from self._call_api_mode(query, chunks)
+            yield from self._call_api_mode(query, chunks, dealer_block)
 
-    def _call_cli_mode(self, query: str, chunks: list[SearchResult]) -> Iterator[str]:
-        prompt = _build_full_prompt(query, chunks)
+    def _call_cli_mode(self, query: str, chunks: list[SearchResult], dealer_block: str | None = None) -> Iterator[str]:
+        prompt = _build_full_prompt(query, chunks, dealer_block)
         yield _md_to_html(_call_cli(prompt, self.cli_path))
 
-    def _call_api_mode(self, query: str, chunks: list[SearchResult]) -> Iterator[str]:
+    def _call_api_mode(self, query: str, chunks: list[SearchResult], dealer_block: str | None = None) -> Iterator[str]:
         user_content = query
         if chunks:
             fragments = "\n\n".join(
@@ -453,6 +471,8 @@ class AnswerGenerator:
                 for i, c in enumerate(chunks)
             )
             user_content = f"Фрагменты из базы знаний:\n{fragments}\n\nВопрос: {query}"
+        if dealer_block:
+            user_content = f"Информация о магазинах в городе:\n{dealer_block}\n\n{user_content}"
 
         with self._api_client.messages.stream(
             model=self._model,
