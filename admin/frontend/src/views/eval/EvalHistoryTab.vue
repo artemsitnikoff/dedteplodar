@@ -2,14 +2,13 @@
 import { ref, computed, onMounted, inject } from 'vue'
 import { api } from '@/api/index.js'
 import {
-  fmtScore, fmtDelta, fmtQuality, fmtDeltaQuality, fmtPct,
-  scoreColor, deltaColor, qualityColor, deltaQualityColor
+  fmtScore, fmtQuality, fmtDeltaQuality, fmtPct,
+  scoreColor, qualityColor, deltaQualityColor
 } from '@/utils/format.js'
 import AjaxFrog from '@/components/AjaxFrog.vue'
 import RunSummaryCard from '@/components/eval/RunSummaryCard.vue'
 import EvalResultRow from '@/components/eval/EvalResultRow.vue'
 import CompareRunsCard from '@/components/eval/CompareRunsCard.vue'
-import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
 import { computeRunStats } from '@/utils/evalStats.js'
 
 const toast = inject('toast')
@@ -488,41 +487,4 @@ defineExpose({ loadRuns, runs })
 .score-muted { color: var(--fg-3); }
 .score-none { color: var(--fg-4); }
 
-.cat-badge {
-  font-size: var(--fs-11);
-  font-weight: var(--fw-semibold);
-  padding: 2px 6px;
-  border-radius: var(--rad-sm);
-  white-space: nowrap;
-  background: var(--bg-panel-2);
-  color: var(--fg-2);
-}
-
-.cat-selection { background: color-mix(in srgb, var(--ark-blue-600) 15%, transparent); color: var(--ark-blue-600); }
-.cat-specs { background: color-mix(in srgb, var(--ark-green-600) 15%, transparent); color: var(--ark-green-600); }
-.cat-install { background: color-mix(in srgb, var(--ark-purple-600) 15%, transparent); color: var(--ark-purple-600); }
-.cat-company { background: color-mix(in srgb, var(--ark-amber-600) 15%, transparent); color: var(--ark-amber-600); }
-.cat-dealer { background: color-mix(in srgb, var(--ark-red-600) 15%, transparent); color: var(--ark-red-600); }
-
-.qtype-badge {
-  font-size: var(--fs-11);
-  font-weight: var(--fw-semibold);
-  padding: 2px 6px;
-  border-radius: var(--rad-sm);
-  white-space: nowrap;
-  background: var(--bg-panel-2);
-  color: var(--fg-3);
-}
-
-.qt-rag { background: color-mix(in srgb, var(--ark-blue-600) 15%, transparent); color: var(--ark-blue-600); }
-.qt-ref { background: color-mix(in srgb, var(--ark-green-600) 15%, transparent); color: var(--ark-green-600); }
-.qt-dealer { background: color-mix(in srgb, var(--ark-purple-600) 15%, transparent); color: var(--ark-purple-600); }
-.qt-faq { background: color-mix(in srgb, var(--ark-amber-600) 15%, transparent); color: var(--ark-amber-600); }
-.qt-error { background: color-mix(in srgb, var(--ark-red-600) 15%, transparent); color: var(--ark-red-600); }
-
-.type-changed {
-  background: color-mix(in srgb, var(--ark-amber-600) 20%, transparent);
-  color: var(--ark-amber-700);
-  font-weight: var(--fw-bold);
-}
 </style>

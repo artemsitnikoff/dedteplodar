@@ -1,7 +1,7 @@
 <script setup>
 import {
-  fmtScore, fmtDelta, fmtQuality, fmtDeltaQuality, fmtPct,
-  scoreColor, deltaColor, qualityColor, deltaQualityColor
+  fmtScore, fmtDelta, fmtQuality, fmtDeltaQuality,
+  scoreColor, deltaColor, deltaQualityColor
 } from '@/utils/format.js'
 import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
 
