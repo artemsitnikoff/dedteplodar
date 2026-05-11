@@ -19,7 +19,9 @@ const compareLoading = ref(false)
 
 async function compareLastTwo() {
   if (props.runs.length < 2) return
-  const [runA, runB] = [props.runs[1], props.runs[0]]
+  // runs come sorted DESC (newest first); compare goes A→B = old→new
+  const runA = props.runs[1]
+  const runB = props.runs[0]
   compareLoading.value = true
   compareData.value = null
   try {

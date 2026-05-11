@@ -20,10 +20,6 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
-
-function handleClose() {
-  emit('close')
-}
 </script>
 
 <template>
@@ -33,7 +29,7 @@ function handleClose() {
       <span class="compare-arrow">→</span>
       <span class="run-label-b">#{{ runB.id }}</span>
     </div>
-    <button @click="handleClose" class="close-btn" title="Закрыть сравнение">✕</button>
+    <button @click="$emit('close')" class="close-btn" title="Закрыть сравнение">✕</button>
   </div>
 
   <div class="compare-summary">
@@ -115,8 +111,6 @@ function handleClose() {
 
 .compare-sep { color: var(--fg-4); }
 .compare-stat { font-size: var(--fs-13); color: var(--fg-2); }
-.compare-stat.improved { color: var(--ark-green-600); font-weight: var(--fw-semibold); }
-.compare-stat.degraded { color: var(--ark-red-600); font-weight: var(--fw-semibold); }
 
 .compare-counts .improved { color: var(--ark-green-600); font-weight: var(--fw-semibold); }
 .compare-counts .degraded { color: var(--ark-red-600); font-weight: var(--fw-semibold); }
