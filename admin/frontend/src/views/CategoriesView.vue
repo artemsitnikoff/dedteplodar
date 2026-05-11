@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import CategoryNode from '@/components/CategoryNode.vue'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const router = useRouter()
 const toast = inject('toast', () => {})
@@ -54,7 +55,7 @@ onMounted(loadCategories)
     </PageHeader>
 
     <div class="content">
-      <div v-if="loading" class="loading">Загрузка…</div>
+      <div v-if="loading" class="loading"><AjaxFrog /></div>
 
       <div v-else class="tree-container">
         <div class="tree-card">

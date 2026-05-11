@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, inject } from 'vue'
 import { api } from '@/api/index.js'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const toast = inject('toast')
 const entries = ref([])
@@ -104,7 +105,7 @@ onMounted(load)
     </div>
 
     <div class="table-wrap">
-      <div v-if="loading" class="loading-state">Загрузка...</div>
+      <div v-if="loading" class="loading-state"><AjaxFrog /></div>
       <table v-else class="faq-table">
         <colgroup>
           <col style="width: 44px" />

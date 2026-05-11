@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, inject } from 'vue'
 import { api } from '@/api/index.js'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const toast = inject('toast')
 const logs = ref([])
@@ -151,7 +152,7 @@ function formatTs(ts) {
 
     <!-- Table -->
     <div class="table-wrap">
-      <div v-if="loading" class="loading-state">Загрузка...</div>
+      <div v-if="loading" class="loading-state"><AjaxFrog /></div>
       <table v-else class="log-table">
         <colgroup>
           <col style="width: 96px" />

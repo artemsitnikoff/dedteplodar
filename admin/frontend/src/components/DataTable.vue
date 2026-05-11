@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const props = defineProps({
   columns: {
@@ -39,7 +40,7 @@ const totalPages = computed(() => {
 <template>
   <div class="data-table">
     <div v-if="loading" class="table-loading">
-      Загрузка...
+      <AjaxFrog />
     </div>
 
     <table v-else class="table">

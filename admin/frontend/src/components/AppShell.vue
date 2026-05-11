@@ -1,6 +1,5 @@
 <script setup>
 import AppSidebar from '@/components/AppSidebar.vue'
-import AjaxFrog from '@/components/AjaxFrog.vue'
 </script>
 
 <template>
@@ -10,9 +9,6 @@ import AjaxFrog from '@/components/AjaxFrog.vue'
       <div class="topbar-title">
         <span class="topbar-emoji">🔥</span>
         <span class="topbar-text">ДедТеплодар</span>
-      </div>
-      <div class="topbar-right">
-        <AjaxFrog />
       </div>
     </header>
     <main class="main-content">

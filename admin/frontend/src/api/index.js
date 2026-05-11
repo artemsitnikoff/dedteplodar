@@ -8,24 +8,40 @@ const client = axios.create({
   },
 })
 
-// Global counter of in-flight requests — used by <AjaxFrog> to dance
+// Counter of in-flight requests (kept for any future global indicator)
 export const activeRequests = ref(0)
+
+const SLOW_MS = 800
+const VERY_SLOW_MS = 2500
 
 client.interceptors.request.use((config) => {
   activeRequests.value++
+  config.metadata = { startedAt: performance.now() }
+  console.log(`[api] → ${config.method?.toUpperCase()} ${config.url}`)
   return config
 })
 
-function tick() {
-  // Keep the frog dancing for a short tail so single fast requests are still visible
-  setTimeout(() => {
-    if (activeRequests.value > 0) activeRequests.value--
-  }, 200)
+function logResponse(config, status, label = '') {
+  const ms = Math.round(performance.now() - (config?.metadata?.startedAt ?? performance.now()))
+  const tag = `[api]${label}`
+  const line = `${tag} ← ${status} ${config?.method?.toUpperCase() ?? '?'} ${config?.url ?? '?'}  ${ms}ms`
+  if (ms >= VERY_SLOW_MS) console.error(line + '  ⚠ VERY SLOW')
+  else if (ms >= SLOW_MS) console.warn(line + '  ⚠ slow')
+  else console.log(line)
 }
 
 client.interceptors.response.use(
-  (resp) => { tick(); return resp },
-  (err) => { tick(); return Promise.reject(err) }
+  (resp) => {
+    if (activeRequests.value > 0) activeRequests.value--
+    logResponse(resp.config, resp.status)
+    return resp
+  },
+  (err) => {
+    if (activeRequests.value > 0) activeRequests.value--
+    const status = err.response?.status ?? 'ERR'
+    logResponse(err.config, status, ' FAIL')
+    return Promise.reject(err)
+  }
 )
 
 // API endpoints

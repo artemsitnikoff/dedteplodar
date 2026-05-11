@@ -3,6 +3,7 @@ import { ref, reactive, onMounted, onUnmounted, inject } from 'vue'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const toast = inject('toast')
 
@@ -184,7 +185,7 @@ onUnmounted(() => {
 
     <div class="content">
       <div v-if="loading" class="loading">
-        Загрузка данных конвейера...
+        <AjaxFrog text="Загрузка данных конвейера…" size="32px" />
       </div>
 
       <div v-else class="pipeline-layout">

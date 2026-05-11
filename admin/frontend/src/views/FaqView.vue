@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, inject, watch } from 'vue'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const props = defineProps({
   type: {
@@ -107,7 +108,7 @@ watch(() => props.type, loadFaq, { immediate: true })
 
     <div class="content">
       <div v-if="loading" class="loading">
-        Загрузка данных...
+        <AjaxFrog text="Загрузка данных…" size="32px" />
       </div>
 
       <div v-else class="editor-container">

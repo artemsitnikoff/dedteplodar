@@ -1,43 +1,45 @@
 <script setup>
-import { computed } from 'vue'
-import { activeRequests } from '@/api'
-
-const isBusy = computed(() => activeRequests.value > 0)
+defineProps({
+  text: { type: String, default: 'Загрузка…' },
+  size: { type: String, default: '24px' },
+})
 </script>
 
 <template>
-  <span class="ajax-frog" :class="{ busy: isBusy }" :title="isBusy ? 'Загружаю…' : ''">🐸</span>
+  <span class="ajax-frog-inline">
+    <span class="ajax-frog-emoji" :style="{ fontSize: size }">🐸</span>
+    <span v-if="text" class="ajax-frog-text">{{ text }}</span>
+  </span>
 </template>
 
 <style scoped>
-.ajax-frog {
-  display: inline-block;
-  font-size: 18px;
-  line-height: 1;
+.ajax-frog-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-3, #9ca3af);
+  font-size: 13px;
   user-select: none;
-  opacity: 0.35;
-  filter: grayscale(0.6);
-  transition: opacity 200ms ease, filter 200ms ease;
+}
+
+.ajax-frog-emoji {
+  display: inline-block;
+  line-height: 1;
   transform-origin: 50% 90%;
+  animation: frogDance 520ms ease-in-out infinite;
 }
 
-.ajax-frog:hover {
-  opacity: 1;
-  filter: none;
-  animation: frogDance 600ms ease-in-out infinite;
-}
-
-.ajax-frog.busy {
-  opacity: 1;
-  filter: none;
-  animation: frogDance 480ms ease-in-out infinite;
+.ajax-frog-text {
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 @keyframes frogDance {
-  0%   { transform: rotate(-12deg) translateY(0); }
-  25%  { transform: rotate(10deg) translateY(-3px); }
-  50%  { transform: rotate(-8deg) translateY(0); }
-  75%  { transform: rotate(12deg) translateY(-2px); }
-  100% { transform: rotate(-12deg) translateY(0); }
+  0%   { transform: rotate(-14deg) translateY(0) scale(1); }
+  20%  { transform: rotate(12deg) translateY(-4px) scale(1.07); }
+  40%  { transform: rotate(-8deg) translateY(0) scale(1); }
+  60%  { transform: rotate(14deg) translateY(-3px) scale(1.05); }
+  80%  { transform: rotate(-10deg) translateY(0) scale(1); }
+  100% { transform: rotate(-14deg) translateY(0) scale(1); }
 }
 </style>

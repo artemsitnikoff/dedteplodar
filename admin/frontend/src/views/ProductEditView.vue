@@ -3,6 +3,7 @@ import { ref, computed, onMounted, inject, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,7 +137,7 @@ onMounted(() => {
 
     <div class="content">
       <div v-if="loading" class="loading">
-        Загрузка товара...
+        <AjaxFrog text="Загрузка товара…" size="32px" />
       </div>
 
       <div v-else class="layout">
@@ -331,7 +332,7 @@ onMounted(() => {
           <span v-else>текст PDF</span>
         </div>
         <div class="modal-body">
-          <div v-if="textLoading" class="modal-loading">Загрузка…</div>
+          <div v-if="textLoading" class="modal-loading"><AjaxFrog /></div>
           <div v-else-if="!textModal.has_text" class="modal-empty">Текст документа отсутствует</div>
           <pre v-else class="modal-text">{{ textModal.text }}</pre>
         </div>

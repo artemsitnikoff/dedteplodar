@@ -2,6 +2,7 @@
 import { ref, onMounted, inject } from 'vue'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const toast = inject('toast')
 const stats = ref({})
@@ -31,7 +32,7 @@ onMounted(() => {
 
     <div class="content">
       <div v-if="loading" class="loading">
-        Загрузка статистики...
+        <AjaxFrog text="Загрузка статистики…" size="32px" />
       </div>
 
       <div v-else class="stats-grid">

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
 import { api } from '@/api/index.js'
+import AjaxFrog from '@/components/AjaxFrog.vue'
 
 const toast = inject('toast')
 
@@ -341,7 +342,7 @@ function fmtPct(p) {
     <!-- ── Tab: Датасет ────────────────────────────────────────────────────── -->
     <div v-if="activeTab === 'dataset'">
       <div class="table-wrap">
-        <div v-if="datasetLoading" class="loading-state">Загрузка...</div>
+        <div v-if="datasetLoading" class="loading-state"><AjaxFrog /></div>
         <table v-else class="log-table">
           <colgroup>
             <col style="width: 56px" />
@@ -626,7 +627,7 @@ function fmtPct(p) {
       </div>
 
       <!-- Runs list -->
-      <div v-if="runsLoading" class="loading-state">Загрузка...</div>
+      <div v-if="runsLoading" class="loading-state"><AjaxFrog /></div>
       <div v-else-if="runs.length === 0" class="empty-state-box">Прогонов ещё нет</div>
       <div v-else class="runs-list">
         <div v-for="run in runs" :key="run.id" class="run-card">
@@ -664,7 +665,7 @@ function fmtPct(p) {
 
           <!-- Expanded results -->
           <div v-if="expandedRunId === run.id" class="run-card-body">
-            <div v-if="expandedLoading" class="loading-state">Загрузка...</div>
+            <div v-if="expandedLoading" class="loading-state"><AjaxFrog /></div>
             <div v-else-if="expandedRunData">
               <!-- Per-run summary with delta vs previous -->
               <div v-if="expandedSummary" class="summary-block panel summary-inline">
