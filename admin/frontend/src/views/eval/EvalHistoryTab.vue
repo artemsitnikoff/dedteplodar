@@ -21,9 +21,7 @@ const expandedRunData = ref(null)
 const expandedLoading = ref(false)
 const expandedAnswerIds = ref(new Set())
 
-// ── compare ───────────────────────────────────────────────────────────────────
-const compareData = ref(null)
-const compareLoading = ref(false)
+// ── compare (moved to CompareRunsCard) ───────────────────────────────────────
 
 async function loadRuns() {
   runsLoading.value = true
@@ -74,20 +72,6 @@ async function deleteRun(runId) {
   }
 }
 
-async function compareLastTwo() {
-  if (runs.value.length < 2) return
-  const [runA, runB] = [runs.value[1], runs.value[0]]
-  compareLoading.value = true
-  compareData.value = null
-  try {
-    const res = await api.compareEvalRuns(runA.id, runB.id)
-    compareData.value = res.data
-  } catch {
-    toast('Ошибка сравнения', 'error')
-  } finally {
-    compareLoading.value = false
-  }
-}
 
 function toggleAnswer(qid) {
   const s = new Set(expandedAnswerIds.value)
@@ -144,20 +128,10 @@ defineExpose({ loadRuns, runs })
 <template>
   <div class="eval-history-tab">
     <!-- Compare section -->
-    <div v-if="runs.length >= 2" class="compare-section">
-      <div class="compare-header">
-        <button @click="compareLastTwo" :disabled="compareLoading" class="btn btn-secondary">
-          <AjaxFrog v-if="compareLoading" text="" size="14px" />
-          <span v-else>Сравнить последние 2</span>
-        </button>
-      </div>
-
-      <CompareRunsCard
-        v-if="compareData"
-        :compare-data="compareData"
-        @close="compareData = null"
-      />
-    </div>
+    <CompareRunsCard
+      v-if="runs.length >= 2"
+      :runs="runs"
+    />
 
     <!-- Runs list -->
     <div class="runs-section">
@@ -261,47 +235,6 @@ defineExpose({ loadRuns, runs })
   gap: var(--sp-6);
 }
 
-.compare-section {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-1);
-  border-radius: var(--rad-lg);
-  padding: var(--sp-4);
-}
-
-.compare-header {
-  margin-bottom: var(--sp-4);
-}
-
-.btn {
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--border-1);
-  border-radius: var(--rad-md);
-  background: var(--bg-panel);
-  color: var(--fg-1);
-  font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
-  cursor: pointer;
-  transition: all var(--dur-fast);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.btn-secondary {
-  background: var(--bg-panel-2);
-  border-color: var(--border-2);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
 
 
 .loading-state {

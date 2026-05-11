@@ -1,34 +1,68 @@
 <script setup>
+import { ref, inject } from 'vue'
 import {
   fmtScore, fmtDelta, fmtQuality, fmtDeltaQuality,
   scoreColor, deltaColor, deltaQualityColor
 } from '@/utils/format.js'
 import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
+import { api } from '@/api/index.js'
+import AjaxFrog from '@/components/AjaxFrog.vue'
+
+const toast = inject('toast')
 
 const props = defineProps({
-  compareData: {
-    type: Object,
+  runs: {
+    type: Array,
     required: true
   }
 })
 
 const emit = defineEmits(['close'])
 
+const compareData = ref(null)
+const compareLoading = ref(false)
+
+async function compareLastTwo() {
+  if (props.runs.length < 2) return
+  const [runA, runB] = [props.runs[1], props.runs[0]]
+  compareLoading.value = true
+  compareData.value = null
+  try {
+    const res = await api.compareEvalRuns(runA.id, runB.id)
+    compareData.value = res.data
+  } catch {
+    toast('Ошибка сравнения', 'error')
+  } finally {
+    compareLoading.value = false
+  }
+}
+
 function handleClose() {
+  compareData.value = null
   emit('close')
 }
 </script>
 
 <template>
-  <div class="compare-results">
-    <div class="compare-header">
-      <div class="compare-runs-label">
-        <span class="run-label-a">#{{ compareData.run_a.id }}</span>
-        <span class="compare-arrow">→</span>
-        <span class="run-label-b">#{{ compareData.run_b.id }}</span>
-      </div>
-      <button @click="handleClose" class="close-btn" title="Закрыть сравнение">✕</button>
+  <div class="compare-card">
+    <!-- Compare button when no data yet -->
+    <div v-if="!compareData" class="compare-button-section">
+      <button @click="compareLastTwo" :disabled="compareLoading" class="btn btn-secondary">
+        <AjaxFrog v-if="compareLoading" text="" size="14px" />
+        <span v-else>Сравнить последние 2</span>
+      </button>
     </div>
+
+    <!-- Compare results when data loaded -->
+    <div v-else class="compare-results">
+      <div class="compare-header">
+        <div class="compare-runs-label">
+          <span class="run-label-a">#{{ compareData.run_a.id }}</span>
+          <span class="compare-arrow">→</span>
+          <span class="run-label-b">#{{ compareData.run_b.id }}</span>
+        </div>
+        <button @click="handleClose" class="close-btn" title="Закрыть сравнение">✕</button>
+      </div>
 
     <div class="compare-summary">
       <div v-if="compareData.summary.quality_a !== null && compareData.summary.quality_b !== null" class="compare-stat-row">
@@ -111,11 +145,54 @@ function handleClose() {
           </tr>
         </tbody>
       </table>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.compare-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-1);
+  border-radius: var(--rad-lg);
+  padding: var(--sp-4);
+}
+
+.compare-button-section {
+  text-align: left;
+}
+
+.btn {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-1);
+  border-radius: var(--rad-md);
+  background: var(--bg-panel);
+  color: var(--fg-1);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  transition: all var(--dur-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.btn-secondary {
+  background: var(--bg-panel-2);
+  border-color: var(--border-2);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .compare-results {
   margin-top: var(--sp-4);
 }
