@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _generator = None
 _generator_lock = None
+_init_lock = threading.Lock()  # One-shot guard for asyncio.Lock creation
 
 # Parallel Claude CLI subprocesses. On a small VPS each call pegs a core
 # for ~15-30s, so 4 workers starve uvicorn. Default 2, bump via env if host
@@ -60,8 +61,10 @@ async def get_eval_generator():
     """Return the module-level generator singleton, initialising it on first call."""
     global _generator, _generator_lock
     if _generator is None:
-        if _generator_lock is None:
-            _generator_lock = asyncio.Lock()
+        # Explicit thread-level protection for asyncio.Lock creation
+        with _init_lock:
+            if _generator_lock is None:
+                _generator_lock = asyncio.Lock()
         async with _generator_lock:
             # Double-check inside the lock to avoid double-init
             if _generator is None:
@@ -260,6 +263,19 @@ def run_eval_background(run_id: int) -> None:
     """Execute the full eval dataset with parallel workers; called via BackgroundTasks."""
     global _generator
     if _generator is None:
+        logger.error(
+            "[eval] run=%s started without initialised generator — aborting",
+            run_id,
+        )
+        # Mark run as failed so the UI doesn't show it as running forever
+        try:
+            with SessionLocal() as session:
+                run = session.get(EvalRun, run_id)
+                if run:
+                    run.status = "error"
+                    session.commit()
+        except Exception:
+            logger.exception("[eval] failed to mark run=%s as error", run_id)
         raise RuntimeError(
             "Generator not initialized. Call get_eval_generator() before background task."
         )
