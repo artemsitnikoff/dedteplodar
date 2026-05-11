@@ -230,24 +230,32 @@ defineExpose({ loadRuns })
 
       <div v-if="compareData" class="compare-results">
         <div class="compare-runs-label">
-          <span class="run-label-a">#{{ compareData.run_a_id }}</span>
+          <span class="run-label-a">#{{ compareData.run_a.id }}</span>
           <span class="compare-arrow">→</span>
-          <span class="run-label-b">#{{ compareData.run_b_id }}</span>
+          <span class="run-label-b">#{{ compareData.run_b.id }}</span>
         </div>
 
         <div class="compare-summary">
-          <div class="compare-stat-row">
+          <div v-if="compareData.summary.quality_a !== null && compareData.summary.quality_b !== null" class="compare-stat-row">
             <span>Quality:</span>
-            <span :class="compareData.summary.quality_delta > 0 ? 'improved' : compareData.summary.quality_delta < 0 ? 'degraded' : ''">
-              {{ compareData.summary.quality_a.toFixed(1) }}
-            </span>
+            <span>{{ fmtQuality(compareData.summary.quality_a) }}</span>
             <span class="compare-sep">→</span>
-            <span :class="compareData.summary.quality_delta > 0 ? 'improved' : compareData.summary.quality_delta < 0 ? 'degraded' : ''">
-              {{ compareData.summary.quality_b.toFixed(1) }}
+            <span>{{ fmtQuality(compareData.summary.quality_b) }}</span>
+            <span v-if="compareData.summary.quality_delta !== null"
+                  :class="['compare-stat', deltaQualityColor(compareData.summary.quality_delta)]">
+              ({{ fmtDeltaQuality(compareData.summary.quality_delta) }})
             </span>
-            <span :class="['compare-stat', compareData.summary.quality_delta > 0.5 ? 'improved' : compareData.summary.quality_delta < -0.5 ? 'degraded' : '']">
-              ({{ compareData.summary.quality_delta >= 0 ? '+' : '' }}{{ compareData.summary.quality_delta.toFixed(1) }})
-            </span>
+          </div>
+          <div class="compare-stat-row">
+            <span>Avg score:</span>
+            <span>{{ fmtScore(compareData.summary.avg_score_a) }}</span>
+            <span class="compare-sep">→</span>
+            <span>{{ fmtScore(compareData.summary.avg_score_b) }}</span>
+          </div>
+          <div class="compare-stat-row compare-counts">
+            <span class="improved">улучшилось: {{ compareData.summary.improved }}</span>
+            <span class="degraded">ухудшилось: {{ compareData.summary.degraded }}</span>
+            <span>тип изменился: {{ compareData.summary.type_changes }}</span>
           </div>
         </div>
 
@@ -276,8 +284,8 @@ defineExpose({ loadRuns })
               </tr>
             </thead>
             <tbody>
-              <tr v-for="q in compareData.questions" :key="q.question_id" class="log-row">
-                <td class="cell-num">{{ q.question_id }}</td>
+              <tr v-for="q in compareData.questions" :key="q.id" class="log-row">
+                <td class="cell-num">{{ q.id }}</td>
                 <td><span :class="['cat-badge', categoryBadgeClass(q.category)]">{{ q.category }}</span></td>
                 <td class="cell-q">{{ q.question }}</td>
                 <td class="cell-score">

@@ -1,7 +1,7 @@
 <script setup>
 import {
   fmtScore, fmtDelta, fmtQuality, fmtDeltaQuality, fmtPct,
-  qualityColor, deltaColor, deltaQualityColor
+  qualityColor, deltaColor, deltaQualityColor, scoreColor
 } from '@/utils/format.js'
 
 const props = defineProps({

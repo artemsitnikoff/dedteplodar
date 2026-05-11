@@ -1,6 +1,5 @@
 <script setup>
 import { scoreColor } from '@/utils/format.js'
-import { inject } from 'vue'
 
 const props = defineProps({
   result: {
@@ -56,55 +55,53 @@ function handleLoadAnswer() {
 </script>
 
 <template>
-  <template>
-    <tr
-      class="log-row clickable-row"
-      :class="{ 'row-open': isOpen }"
-      @click="handleRowClick"
-    >
-      <td class="cell-num">{{ result.question_id }}</td>
-      <td>
-        <span :class="['cat-badge', categoryBadgeClass(result.category)]">
-          {{ result.category }}
-        </span>
-      </td>
-      <td class="cell-q">{{ result.question }}</td>
-      <td>
-        <span :class="['qtype-badge', qtypeCls(result.expected_type)]">
-          {{ qtypeLabel(result.expected_type) }}
-        </span>
-      </td>
-      <td>
-        <span v-if="result.error" class="error-note" :title="result.error">ERR</span>
-        <span v-else-if="result.actual_type" :class="['qtype-badge', qtypeCls(result.actual_type)]">
-          {{ qtypeLabel(result.actual_type) }}
-        </span>
-        <span v-else class="score-none">—</span>
-      </td>
-      <td class="cell-score">
-        <span v-if="result.top_score !== null && result.top_score !== undefined"
-              :class="['score-val', scoreColor(result.top_score)]">
-          {{ result.top_score.toFixed(3) }}
-        </span>
-        <span v-else class="score-none">—</span>
-      </td>
-      <td class="cell-num latency">
-        {{ result.latency_ms !== null ? result.latency_ms + 'ms' : '—' }}
-      </td>
-    </tr>
-    <tr v-if="isOpen" class="answer-row">
-      <td colspan="7">
-        <div v-if="result.error" class="answer-error">⚠ {{ result.error }}</div>
-        <div v-else-if="result.answer" class="answer-body">
-          <pre class="answer-text">{{ result.answer }}</pre>
-        </div>
-        <div v-else class="answer-empty">
-          <span>Ответ не загружен</span>
-          <button @click.stop="handleLoadAnswer" class="load-answer-btn">Загрузить</button>
-        </div>
-      </td>
-    </tr>
-  </template>
+  <tr
+    class="log-row clickable-row"
+    :class="{ 'row-open': isOpen }"
+    @click="handleRowClick"
+  >
+    <td class="cell-num">{{ result.question_id }}</td>
+    <td>
+      <span :class="['cat-badge', categoryBadgeClass(result.category)]">
+        {{ result.category }}
+      </span>
+    </td>
+    <td class="cell-q">{{ result.question }}</td>
+    <td>
+      <span :class="['qtype-badge', qtypeCls(result.expected_type)]">
+        {{ qtypeLabel(result.expected_type) }}
+      </span>
+    </td>
+    <td>
+      <span v-if="result.error" class="error-note" :title="result.error">ERR</span>
+      <span v-else-if="result.actual_type" :class="['qtype-badge', qtypeCls(result.actual_type)]">
+        {{ qtypeLabel(result.actual_type) }}
+      </span>
+      <span v-else class="score-none">—</span>
+    </td>
+    <td class="cell-score">
+      <span v-if="result.top_score !== null && result.top_score !== undefined"
+            :class="['score-val', scoreColor(result.top_score)]">
+        {{ result.top_score.toFixed(3) }}
+      </span>
+      <span v-else class="score-none">—</span>
+    </td>
+    <td class="cell-num latency">
+      {{ result.latency_ms !== null ? result.latency_ms + 'ms' : '—' }}
+    </td>
+  </tr>
+  <tr v-if="isOpen" class="answer-row">
+    <td colspan="7">
+      <div v-if="result.error" class="answer-error">⚠ {{ result.error }}</div>
+      <div v-else-if="result.answer" class="answer-body">
+        <pre class="answer-text">{{ result.answer }}</pre>
+      </div>
+      <div v-else class="answer-empty">
+        <span>Ответ не загружен</span>
+        <button @click.stop="handleLoadAnswer" class="load-answer-btn">Загрузить</button>
+      </div>
+    </td>
+  </tr>
 </template>
 
 <style scoped>

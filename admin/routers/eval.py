@@ -555,13 +555,26 @@ async def compare_runs(run_id: int, other_run_id: int, db: Session = Depends(get
     avg_a = round(sum(scores_a) / len(scores_a), 4) if scores_a else None
     avg_b = round(sum(scores_b) / len(scores_b), 4) if scores_b else None
 
+    # Composite quality scores for both runs, plus delta
+    aggs = _compute_aggregates_batch(db, [run_id, other_run_id])
+    quality_a = aggs.get(run_id, {}).get("quality_score")
+    quality_b = aggs.get(other_run_id, {}).get("quality_score")
+    quality_delta = (
+        round(quality_b - quality_a, 1)
+        if quality_a is not None and quality_b is not None
+        else None
+    )
+
     return {
-        "run_a": _serialise_run(run_a),
-        "run_b": _serialise_run(run_b),
+        "run_a": _serialise_run(run_a, aggregates=aggs.get(run_id)),
+        "run_b": _serialise_run(run_b, aggregates=aggs.get(other_run_id)),
         "questions": questions,
         "summary": {
             "avg_score_a": avg_a,
             "avg_score_b": avg_b,
+            "quality_a": quality_a,
+            "quality_b": quality_b,
+            "quality_delta": quality_delta,
             "improved": improved,
             "degraded": degraded,
             "unchanged": unchanged,

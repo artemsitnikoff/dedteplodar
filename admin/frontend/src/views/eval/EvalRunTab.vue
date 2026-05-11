@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
+import { ref, computed, onUnmounted, inject } from 'vue'
 import { api } from '@/api/index.js'
 import AjaxFrog from '@/components/AjaxFrog.vue'
 import RunSummaryCard from '@/components/eval/RunSummaryCard.vue'
@@ -35,43 +35,24 @@ async function startRun() {
 
 async function pollRun(runId) {
   try {
-    let data
-    // FIXME: Use lightweight progress endpoint when backend is ready
-    try {
-      const res = await api.getEvalRunProgress(runId)
-      data = res.data
-    } catch {
-      // Fallback to full endpoint for now
-      const res = await api.getEvalRun(runId)
-      data = res.data
-      // Update current results immediately when using full endpoint
-      currentRun.value = data
-    }
-
-    // Update basic progress info
-    if (currentRun.value) {
-      currentRun.value = { ...currentRun.value, ...data }
-    } else {
-      currentRun.value = data
-    }
+    // Lightweight progress endpoint — returns status, completed, total, aggregates
+    // but NOT the heavy `results[]` with full LLM answers.
+    const { data } = await api.getEvalRunProgress(runId)
+    currentRun.value = currentRun.value
+      ? { ...currentRun.value, ...data }
+      : data
 
     if (data.status !== 'running') {
       stopPolling()
       isRunning.value = false
 
-      // Load full results once when completed (if not already loaded)
-      if (!currentRun.value.results || currentRun.value.results.length === 0) {
-        const detail = await api.getEvalRun(runId)
-        currentRun.value = detail.data
-      }
+      // Once finished, fetch the full results (with answers) one time
+      const detail = await api.getEvalRun(runId)
+      currentRun.value = detail.data
 
       emit('run-completed')
-
-      if (data.status === 'done') {
-        toast('Eval завершён', 'success')
-      } else {
-        toast('Eval завершился с ошибкой', 'error')
-      }
+      toast(data.status === 'done' ? 'Eval завершён' : 'Eval завершился с ошибкой',
+            data.status === 'done' ? 'success' : 'error')
     }
   } catch {
     // ignore transient errors during polling
@@ -81,7 +62,7 @@ async function pollRun(runId) {
 function schedulePolling(runId) {
   stopPolling()
   pollTimer.value = setInterval(() => {
-    // Stop polling if page is not visible to save server resources
+    // Skip the tick if the user is on a different tab — saves server CPU
     if (document.visibilityState !== 'visible') return
     pollRun(runId)
   }, 3000)
@@ -93,13 +74,6 @@ function stopPolling() {
     pollTimer.value = null
   }
 }
-
-// Stop polling when user switches to another tab
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' && pollTimer.value) {
-    // Keep the timer but it won't make requests
-  }
-})
 
 onUnmounted(stopPolling)
 
