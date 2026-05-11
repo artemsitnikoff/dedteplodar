@@ -1,10 +1,12 @@
 """FastAPI admin application for Teplodar RAG knowledge base."""
+import base64
 import os
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router
@@ -16,6 +18,43 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# ── HTTP Basic auth on every request (except /health) ───────────────────
+_ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+_ADMIN_PASS = os.getenv("ADMIN_PASS", "admin555")
+_AUTH_FREE_PATHS = {"/health"}
+
+
+def _unauthorized() -> Response:
+    return Response(
+        status_code=401,
+        content="Unauthorized",
+        headers={"WWW-Authenticate": 'Basic realm="DedTeplodar Admin"'},
+    )
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if request.url.path in _AUTH_FREE_PATHS:
+        return await call_next(request)
+
+    header = request.headers.get("authorization", "")
+    if not header.startswith("Basic "):
+        return _unauthorized()
+    try:
+        decoded = base64.b64decode(header[6:]).decode("utf-8")
+        user, _, password = decoded.partition(":")
+    except Exception:
+        return _unauthorized()
+
+    if not (
+        secrets.compare_digest(user, _ADMIN_USER)
+        and secrets.compare_digest(password, _ADMIN_PASS)
+    ):
+        return _unauthorized()
+
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,

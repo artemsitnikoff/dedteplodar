@@ -41,6 +41,14 @@ python scripts/build_index.py --rebuild
 - `src/eval/` — модели для eval-датасета (`EvalRun`, `EvalResult`)
 - `src/core/claude_token.py` — авто-рефреш OAuth токена (синхронная + async версии)
 
+## Прод-сервер (важно)
+
+- ArkadiyJarvis уже задеплоен на проде в **`/var/www/ArkadiyJarvis`**
+- Teplodarbot ставится отдельно (например `/var/www/teplodarbot` или `~/teplodarbot`)
+- Папка `data/` внутри teplodarbot — это **симлинк** на `/var/www/ArkadiyJarvis/data`, НЕ отдельная директория. Так Claude OAuth-токен общий, и авто-рефреш не дублируется между проектами.
+- При первом деплое: `ln -s /var/www/ArkadiyJarvis/data /var/www/teplodarbot/data` (вместо `mkdir data`)
+- В docker-compose том `./data:/app/data` корректно следует через симлинк → внутри контейнера видно содержимое ArkadiyJarvis/data
+
 ## Claude CLI auth
 
 Токен хранится в `data/.claude_token.json` (расшарено с ArkadiyJarvis). При запуске `init_token_file()` подгружает токен из env (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN`), если файла нет. Перед каждым вызовом CLI вызывается `ensure_fresh_token_sync()` — рефреш одноразовый, атомарная запись.

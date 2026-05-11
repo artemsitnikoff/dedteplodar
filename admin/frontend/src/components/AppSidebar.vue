@@ -23,7 +23,7 @@ function navigate(routeName) {
       <div class="brand-mark">
         <span class="brand-emoji">🔥</span>
       </div>
-      <div class="brand-name">Теплодар</div>
+      <div class="brand-name">ДедТеплодар</div>
     </div>
 
     <!-- Navigation -->

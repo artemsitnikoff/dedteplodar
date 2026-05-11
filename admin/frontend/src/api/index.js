@@ -1,11 +1,34 @@
 import axios from 'axios'
+import { ref } from 'vue'
 
 const client = axios.create({
-  baseURL: 'http://localhost:8001/api/v1',
+  baseURL: '/api/v1',
   headers: {
     'Content-Type': 'application/json'
-  }
+  },
+  // Send Basic-auth cookie/credentials issued by the browser prompt
+  withCredentials: true,
 })
+
+// Global counter of in-flight requests — used by <AjaxFrog> to dance
+export const activeRequests = ref(0)
+
+client.interceptors.request.use((config) => {
+  activeRequests.value++
+  return config
+})
+
+function tick() {
+  // Keep the frog dancing for a short tail so single fast requests are still visible
+  setTimeout(() => {
+    if (activeRequests.value > 0) activeRequests.value--
+  }, 200)
+}
+
+client.interceptors.response.use(
+  (resp) => { tick(); return resp },
+  (err) => { tick(); return Promise.reject(err) }
+)
 
 // API endpoints
 export const api = {
