@@ -305,7 +305,7 @@ def run_eval_background(run_id: int) -> None:
                 if run:
                     run.status = "done"
                     session.commit()
-        logger.info("[eval] run=%s finished", run_id)
+        logger.info("[eval] run=%s done", run_id)
 
     except Exception as exc:
         logger.exception("[eval] run=%s crashed: %s", run_id, exc)
