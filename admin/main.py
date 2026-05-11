@@ -19,10 +19,18 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── HTTP Basic auth on every request (except /health) ───────────────────
+# ── HTTP Basic auth on every request (except static assets and health) ───────────────────
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 _ADMIN_PASS = os.getenv("ADMIN_PASS", "admin555")
 _AUTH_FREE_PATHS = {"/health"}
+_AUTH_FREE_PREFIXES = ("/assets/", "/vite.svg", "/favicon.ico")
+
+# Security check: fail fast if default password is used in production
+if _ADMIN_PASS == "admin555" and os.getenv("ADMIN_ALLOW_DEFAULT_PASS") != "1":
+    raise RuntimeError(
+        "Default password detected! Set ADMIN_PASS environment variable or "
+        "set ADMIN_ALLOW_DEFAULT_PASS=1 to allow default password in development."
+    )
 
 
 def _unauthorized() -> Response:
@@ -35,7 +43,10 @@ def _unauthorized() -> Response:
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
-    if request.url.path in _AUTH_FREE_PATHS:
+    path = request.url.path
+
+    # Skip auth for public static assets and health endpoint
+    if path in _AUTH_FREE_PATHS or path.startswith(_AUTH_FREE_PREFIXES):
         return await call_next(request)
 
     header = request.headers.get("authorization", "")
@@ -59,7 +70,7 @@ async def basic_auth(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # Can't use credentials with allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )

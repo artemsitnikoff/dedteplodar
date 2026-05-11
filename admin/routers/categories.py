@@ -13,16 +13,16 @@ from admin.schemas.products import ProductList, ProductListItem
 router = APIRouter(prefix="/categories", tags=["Categories"])
 
 
-def build_category_tree(categories: List[Category], parent_id=None) -> List[CategoryNode]:
+def build_category_tree(categories: List[Category], products_count_by_category: dict[int, int], parent_id=None) -> List[CategoryNode]:
     """Build hierarchical category tree."""
     result = []
     for category in categories:
         if category.parent_id == parent_id:
-            # Count products in this category
-            products_count = len(category.products) if category.products else 0
+            # Get products count from precomputed dict
+            products_count = products_count_by_category.get(category.id, 0)
 
             # Build children recursively
-            children = build_category_tree(categories, category.id)
+            children = build_category_tree(categories, products_count_by_category, category.id)
 
             result.append(CategoryNode(
                 id=category.id,
@@ -38,11 +38,19 @@ def build_category_tree(categories: List[Category], parent_id=None) -> List[Cate
 @router.get("/tree", response_model=List[CategoryNode])
 async def get_categories_tree(db: Session = Depends(get_db)):
     """Get categories as hierarchical tree."""
-    categories = db.execute(
-        select(Category).options(selectinload(Category.products))
-    ).scalars().all()
+    # Get all categories without products relation
+    categories = db.execute(select(Category)).scalars().all()
 
-    return build_category_tree(categories)
+    # Get product counts per category in a single query
+    count_query = (
+        select(Product.category_id, func.count(Product.id).label('count'))
+        .where(Product.category_id.is_not(None))
+        .group_by(Product.category_id)
+    )
+    count_results = db.execute(count_query).all()
+    products_count_by_category = {row.category_id: row.count for row in count_results}
+
+    return build_category_tree(categories, products_count_by_category)
 
 
 @router.get("/{category_id}/products", response_model=ProductList)

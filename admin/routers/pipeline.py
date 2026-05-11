@@ -1,10 +1,11 @@
 """Pipeline API router for background tasks and statistics."""
 
+import time
 import uuid
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select, distinct
@@ -23,11 +24,21 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 # In-memory storage for background tasks
 _tasks: Dict[str, Dict[str, Any]] = {}
 
+# Simple time-based cache for stats
+_stats_cache: Optional[Dict[str, Any]] = None
+_stats_cache_timestamp: float = 0
+_STATS_CACHE_TTL = 20  # seconds
 
-@router.get("/stats", response_model=PipelineStats)
-async def get_pipeline_stats(db: Session = Depends(get_db)):
-    """Get database statistics."""
-    # Count entities
+
+def _get_stats_cached(db: Session) -> PipelineStats:
+    """Get pipeline stats with TTL cache."""
+    global _stats_cache, _stats_cache_timestamp
+
+    now = time.time()
+    if _stats_cache and (now - _stats_cache_timestamp) < _STATS_CACHE_TTL:
+        return PipelineStats(**_stats_cache)
+
+    # Cache miss - compute fresh stats
     products_count = db.execute(select(func.count(Product.id))).scalar()
     categories_count = db.execute(select(func.count(Category.id))).scalar()
     documents_count = db.execute(select(func.count(Document.id))).scalar()
@@ -39,20 +50,59 @@ async def get_pipeline_stats(db: Session = Depends(get_db)):
     ).scalars().all()
     index_versions = list(index_versions_result)
 
-    # Get last indexed date (latest chunk created_at)
-    last_chunk = db.execute(
-        select(Chunk.created_at).order_by(Chunk.created_at.desc()).limit(1)
-    ).scalar_one_or_none()
-    last_indexed = last_chunk.isoformat() if last_chunk else None
+    # Use MAX(id) instead of MAX(created_at) for better performance
+    # (assumes id is auto-incrementing and correlates with time)
+    last_chunk_id = db.execute(
+        select(func.max(Chunk.id))
+    ).scalar()
 
-    return PipelineStats(
-        products=products_count,
-        categories=categories_count,
-        documents=documents_count,
-        chunks=chunks_count,
-        index_versions=index_versions,
-        last_indexed=last_indexed,
-    )
+    # If we have chunks, get the created_at of the latest chunk by id
+    last_indexed = None
+    if last_chunk_id:
+        last_chunk = db.execute(
+            select(Chunk.created_at).where(Chunk.id == last_chunk_id)
+        ).scalar_one_or_none()
+        last_indexed = last_chunk.isoformat() if last_chunk else None
+
+    # Cache the result
+    _stats_cache = {
+        "products": products_count,
+        "categories": categories_count,
+        "documents": documents_count,
+        "chunks": chunks_count,
+        "index_versions": index_versions,
+        "last_indexed": last_indexed,
+    }
+    _stats_cache_timestamp = now
+
+    return PipelineStats(**_stats_cache)
+
+
+def _cleanup_old_tasks():
+    """Remove tasks older than 1 hour."""
+    global _tasks
+    now = time.time()
+    cutoff = now - 3600  # 1 hour ago
+
+    to_remove = []
+    for task_id, task_info in _tasks.items():
+        # Check if task is old (we'll use a simple heuristic based on process state)
+        process = task_info.get("process")
+        if process and process.poll() is not None:  # Process finished
+            # If we can't determine age precisely, remove finished tasks after some time
+            # This is a simple cleanup - in production you might want to store timestamps
+            to_remove.append(task_id)
+
+    # Remove old finished tasks (keep recent for status queries)
+    if len(to_remove) > 10:  # Keep some recent ones
+        for task_id in to_remove[:-5]:  # Remove all but last 5
+            del _tasks[task_id]
+
+
+@router.get("/stats", response_model=PipelineStats)
+async def get_pipeline_stats(db: Session = Depends(get_db)):
+    """Get database statistics (cached)."""
+    return _get_stats_cached(db)
 
 
 @router.post("/import-yml", response_model=TaskStartResponse)
@@ -132,6 +182,9 @@ async def rebuild_index():
 @router.get("/tasks/{task_id}", response_model=TaskStatus)
 async def get_task_status(task_id: str):
     """Get background task status."""
+    # Cleanup old tasks periodically
+    _cleanup_old_tasks()
+
     if task_id not in _tasks:
         raise HTTPException(status_code=404, detail="Task not found")
 

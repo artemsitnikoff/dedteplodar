@@ -188,54 +188,99 @@ def _run_eval_background(run_id: int) -> None:
 
 # ─────────────────────────────────────────────── helper serialisers
 
+def _compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Compute aggregates for multiple runs in a single SQL query."""
+    if not run_ids:
+        return {}
+
+    from sqlalchemy import case, func as sql_func
+
+    # Single GROUP BY query for all runs
+    query = (
+        select(
+            EvalResult.run_id,
+            sql_func.count().label('total'),
+            sql_func.avg(EvalResult.top_score).label('avg_score'),
+            sql_func.sum(
+                case(
+                    (EvalResult.actual_type == EvalResult.expected_type, 1),
+                    else_=0
+                )
+            ).label('matched_count'),
+            sql_func.sum(
+                case(
+                    (EvalResult.error.is_not(None), 1),
+                    else_=0
+                )
+            ).label('error_count'),
+            sql_func.avg(EvalResult.latency_ms).label('avg_latency_ms'),
+            sql_func.min(EvalResult.top_score).label('min_score'),
+            sql_func.max(EvalResult.top_score).label('max_score')
+        )
+        .where(EvalResult.run_id.in_(run_ids))
+        .group_by(EvalResult.run_id)
+    )
+
+    results = db.execute(query).all()
+
+    # Process results into aggregates format
+    aggregates = {}
+    for row in results:
+        total = row.total or 0
+        avg_score = round(float(row.avg_score), 4) if row.avg_score is not None else None
+        type_accuracy = round(float(row.matched_count) / total, 4) if total > 0 else None
+        error_count = int(row.error_count) if row.error_count else 0
+        error_rate = round(error_count / total, 4) if total > 0 else None
+        avg_latency_ms = int(row.avg_latency_ms) if row.avg_latency_ms is not None else None
+
+        # Calculate quality score
+        if avg_score is not None and type_accuracy is not None:
+            quality = 100 * (0.7 * avg_score + 0.3 * type_accuracy)
+        elif avg_score is not None:
+            quality = 100 * avg_score
+        elif type_accuracy is not None:
+            quality = 100 * type_accuracy
+        else:
+            quality = None
+
+        aggregates[row.run_id] = {
+            "avg_score": avg_score,
+            "type_accuracy": type_accuracy,
+            "error_count": error_count,
+            "error_rate": error_rate,
+            "avg_latency_ms": avg_latency_ms,
+            "quality_score": round(quality, 1) if quality is not None else None,
+        }
+
+    # Fill missing run_ids with empty aggregates
+    for run_id in run_ids:
+        if run_id not in aggregates:
+            aggregates[run_id] = {
+                "avg_score": None,
+                "type_accuracy": None,
+                "error_count": 0,
+                "error_rate": None,
+                "avg_latency_ms": None,
+                "quality_score": None,
+            }
+
+    return aggregates
+
+
 def _compute_aggregates(db: Session, run_id: int) -> dict[str, Any]:
     """Compute per-run aggregates: avg_score, type_accuracy, errors, latency, composite quality.
 
-    quality_score (0..100) = 70% retrieval quality (avg top_score) + 30% type-classification accuracy.
-    Errors implicitly hurt avg_score (they have NULL score, excluded from mean).
+    Legacy wrapper for backward compatibility.
     """
-    rows = db.execute(
-        select(EvalResult).where(EvalResult.run_id == run_id)
-    ).scalars().all()
-
-    if not rows:
-        return {
-            "avg_score": None,
-            "type_accuracy": None,
-            "error_count": 0,
-            "error_rate": None,
-            "avg_latency_ms": None,
-            "quality_score": None,
-        }
-
-    total = len(rows)
-    scored = [r.top_score for r in rows if r.top_score is not None]
-    matched = sum(1 for r in rows if r.actual_type and r.actual_type == r.expected_type)
-    errors = sum(1 for r in rows if r.error)
-    latencies = [r.latency_ms for r in rows if r.latency_ms is not None]
-
-    avg_score = round(sum(scored) / len(scored), 4) if scored else None
-    type_accuracy = round(matched / total, 4) if total else None
-    error_rate = round(errors / total, 4) if total else None
-    avg_latency_ms = int(sum(latencies) / len(latencies)) if latencies else None
-
-    if avg_score is not None and type_accuracy is not None:
-        quality = 100 * (0.7 * avg_score + 0.3 * type_accuracy)
-    elif avg_score is not None:
-        quality = 100 * avg_score
-    elif type_accuracy is not None:
-        quality = 100 * type_accuracy
-    else:
-        quality = None
-
-    return {
-        "avg_score": avg_score,
-        "type_accuracy": type_accuracy,
-        "error_count": errors,
-        "error_rate": error_rate,
-        "avg_latency_ms": avg_latency_ms,
-        "quality_score": round(quality, 1) if quality is not None else None,
-    }
+    batch_result = _compute_aggregates_batch(db, [run_id])
+    return batch_result.get(run_id, {
+        "avg_score": None,
+        "type_accuracy": None,
+        "error_count": 0,
+        "error_rate": None,
+        "avg_latency_ms": None,
+        "quality_score": None,
+    })
 
 
 def _serialise_run(run: EvalRun, aggregates: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -265,6 +310,23 @@ def _serialise_result(r: EvalResult) -> dict[str, Any]:
         "answer": r.answer,
         "latency_ms": r.latency_ms,
         "error": r.error,
+    }
+
+
+def _serialise_result_without_answer(r: EvalResult) -> dict[str, Any]:
+    """Serialize result without the heavy answer field."""
+    return {
+        "id": r.id,
+        "question_id": r.question_id,
+        "question": r.question,
+        "category": r.category,
+        "expected_type": r.expected_type,
+        "actual_type": r.actual_type,
+        "top_score": r.top_score,
+        "chunks_used": r.chunks_used,
+        "latency_ms": r.latency_ms,
+        "error": r.error,
+        "has_answer": r.answer is not None,
     }
 
 
@@ -310,7 +372,10 @@ async def list_runs(db: Session = Depends(get_db)):
     ).scalars().all()
 
     items: list[dict[str, Any]] = []
-    aggregates_by_id: dict[int, dict[str, Any]] = {r.id: _compute_aggregates(db, r.id) for r in rows}
+
+    # Batch compute aggregates for all runs in one query
+    run_ids = [r.id for r in rows]
+    aggregates_by_id = _compute_aggregates_batch(db, run_ids)
 
     # rows are newest-first; previous (older) run is the next index in the list
     for idx, run in enumerate(rows):
@@ -342,9 +407,26 @@ def _delta_vs(cur: dict[str, Any], prev: dict[str, Any] | None, prev_id: int | N
     return out
 
 
+@router.get("/runs/{run_id}/progress")
+async def get_run_progress(run_id: int, db: Session = Depends(get_db)):
+    """Return lightweight run progress info (for frequent polling)."""
+    run = db.get(EvalRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Only compute aggregates if run is completed
+    aggregates = {}
+    if run.status == "done":
+        aggregates = _compute_aggregates(db, run_id)
+
+    return {
+        **_serialise_run(run, aggregates=aggregates if aggregates else None),
+    }
+
+
 @router.get("/runs/{run_id}")
 async def get_run(run_id: int, db: Session = Depends(get_db)):
-    """Return a run with all its results, aggregates, and delta vs the immediately preceding run."""
+    """Return a run with all its results (without answer text), aggregates, and delta vs the immediately preceding run."""
     run = db.get(EvalRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -363,13 +445,37 @@ async def get_run(run_id: int, db: Session = Depends(get_db)):
         .limit(1)
     ).scalar_one_or_none()
 
-    cur_agg = _compute_aggregates(db, run_id)
-    prev_agg = _compute_aggregates(db, prev_run.id) if prev_run else None
+    # Batch compute aggregates for both current and previous runs
+    run_ids_to_compute = [run_id]
+    if prev_run:
+        run_ids_to_compute.append(prev_run.id)
+
+    aggregates_by_id = _compute_aggregates_batch(db, run_ids_to_compute)
+    cur_agg = aggregates_by_id[run_id]
+    prev_agg = aggregates_by_id.get(prev_run.id) if prev_run else None
     aggregates = {**cur_agg, **_delta_vs(cur_agg, prev_agg, prev_run.id if prev_run else None)}
 
     return {
         **_serialise_run(run, aggregates=aggregates),
-        "results": [_serialise_result(r) for r in results],
+        "results": [_serialise_result_without_answer(r) for r in results],
+    }
+
+
+@router.get("/runs/{run_id}/results/{question_id}/answer")
+async def get_result_answer(run_id: int, question_id: int, db: Session = Depends(get_db)):
+    """Return answer text for a specific question result."""
+    result = db.execute(
+        select(EvalResult)
+        .where(EvalResult.run_id == run_id)
+        .where(EvalResult.question_id == question_id)
+    ).scalar_one_or_none()
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    return {
+        "answer": result.answer,
+        "error": result.error,
     }
 
 

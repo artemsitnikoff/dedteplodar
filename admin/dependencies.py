@@ -1,15 +1,6 @@
 """Common dependencies for admin API."""
 
-from typing import Generator
-from sqlalchemy.orm import Session
+# Re-export unified get_db from core
+from src.core.database import get_db
 
-from src.core.database import SessionLocal
-
-
-def get_db() -> Generator[Session, None, None]:
-    """Get database session."""
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+__all__ = ["get_db"]

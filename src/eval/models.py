@@ -15,7 +15,7 @@ class EvalRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ran_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False, index=True
     )
     total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -23,4 +23,4 @@ class Chunk(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)  # порядок чанка в документе
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
     index_version: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
