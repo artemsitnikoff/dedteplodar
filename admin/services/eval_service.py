@@ -29,6 +29,21 @@ _init_lock = threading.Lock()  # One-shot guard for asyncio.Lock creation
 _EVAL_WORKERS = int(os.getenv("EVAL_WORKERS", "2"))
 
 
+def _mark_run_failed(run_id: int, note: str | None = None) -> None:
+    """Mark EvalRun as 'error' status (and optionally set a note). Best-effort —
+    swallows DB errors and logs them, so callers can use it from non-critical paths."""
+    try:
+        with SessionLocal() as session:
+            run = session.get(EvalRun, run_id)
+            if run:
+                run.status = "error"
+                if note:
+                    run.note = note
+                session.commit()
+    except Exception:
+        logger.exception("[eval] failed to mark run=%s as error", run_id)
+
+
 def _init_generator_sync():
     """Initialise E5Embedder + HybridRetriever + AnswerGenerator (blocking, run once)."""
     from src.core.config import settings
@@ -268,14 +283,7 @@ def run_eval_background(run_id: int) -> None:
             run_id,
         )
         # Mark run as failed so the UI doesn't show it as running forever
-        try:
-            with SessionLocal() as session:
-                run = session.get(EvalRun, run_id)
-                if run:
-                    run.status = "error"
-                    session.commit()
-        except Exception:
-            logger.exception("[eval] failed to mark run=%s as error", run_id)
+        _mark_run_failed(run_id, note="Generator not initialised")
         raise RuntimeError(
             "Generator not initialized. Call get_eval_generator() before background task."
         )
@@ -310,13 +318,4 @@ def run_eval_background(run_id: int) -> None:
 
     except Exception as exc:
         logger.exception("[eval] run=%s crashed: %s", run_id, exc)
-        session = SessionLocal()
-        try:
-            run = session.get(EvalRun, run_id)
-            if run:
-                run.status = "error"
-                session.commit()
-        except Exception:
-            pass
-        finally:
-            session.close()
+        _mark_run_failed(run_id, note=f"Crashed: {str(exc)[:200]}")
