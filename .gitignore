@@ -37,6 +37,8 @@ base/pdfs/
 base/embeddings_*.npy
 base/metadata_*.pkl
 base/feedback.jsonl
+base/*.db-wal
+base/*.db-shm
 
 # Shared data dir (Claude tokens, never commit)
 data/
