@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import '@/assets/tokens.css'
 import '@/assets/badges.css'
+import '@/assets/scores.css'
 
 // Lazy-loaded views for better performance
 const DashboardView = () => import('@/views/DashboardView.vue')

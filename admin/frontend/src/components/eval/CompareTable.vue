@@ -82,12 +82,5 @@ const props = defineProps({
   background: var(--bg-panel);
 }
 
-/* Color classes */
-.score-green { color: var(--ark-green-600); }
-.score-yellow { color: var(--ark-amber-600); }
-.score-red { color: var(--ark-red-600); }
-.score-muted { color: var(--fg-3); }
-.score-none { color: var(--fg-4); }
-
-/* Badge styles moved to global @/assets/badges.css */
+/* Badge and score styles moved to global @/assets/badges.css and @/assets/scores.css */
 </style>

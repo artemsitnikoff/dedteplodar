@@ -159,8 +159,5 @@ const props = defineProps({
   text-align: center;
 }
 
-.score-green { color: var(--ark-green-600); }
-.score-yellow { color: var(--ark-amber-600); }
-.score-red { color: var(--ark-red-600); }
-.score-muted { color: var(--fg-3); }
+/* Score styles moved to global @/assets/scores.css */
 </style>

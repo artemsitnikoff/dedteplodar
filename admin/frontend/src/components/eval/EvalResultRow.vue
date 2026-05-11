@@ -127,17 +127,11 @@ function handleLoadAnswer() {
   color: var(--accent);
 }
 
-/* Helper classes that need to be global or inherited from parent */
-.score-val.score-green { color: var(--ark-green-600); }
-.score-val.score-yellow { color: var(--ark-amber-600); }
-.score-val.score-red { color: var(--ark-red-600); }
-.score-none { color: var(--fg-4); }
-
 .error-note {
   color: var(--ark-red-600);
   font-weight: var(--fw-bold);
   font-size: var(--fs-11);
 }
 
-/* Badge styles moved to global @/assets/badges.css */
+/* Badge and score styles moved to global @/assets/badges.css and @/assets/scores.css */
 </style>

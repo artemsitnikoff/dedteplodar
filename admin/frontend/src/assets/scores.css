@@ -1,0 +1,13 @@
+/* Score utility classes - shared across eval components */
+
+.score-val {
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-semibold);
+}
+
+.score-green  { color: var(--ark-green-600); }
+.score-yellow { color: var(--ark-amber-600); }
+.score-red    { color: var(--ark-red-600); }
+.score-muted  { color: var(--fg-3); }
+.score-none   { color: var(--fg-4); }

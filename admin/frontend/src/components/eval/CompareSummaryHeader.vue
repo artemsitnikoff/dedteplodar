@@ -19,7 +19,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close'])
+defineEmits(['close'])
 </script>
 
 <template>

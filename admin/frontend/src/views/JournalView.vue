@@ -453,31 +453,7 @@ function formatTs(ts) {
 .cell-num { text-align: center; color: var(--fg-2); white-space: nowrap; }
 .log-table td.cell-fb { text-align: center; white-space: nowrap; overflow: visible; text-overflow: clip; }
 
-.qtype-badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: var(--rad-sm);
-  font-size: var(--fs-11);
-  font-weight: var(--fw-semibold);
-  letter-spacing: 0.03em;
-}
 
-.qt-rag    { background: var(--ark-blue-100);   color: var(--ark-blue-700); }
-.qt-faq    { background: var(--ark-green-100);  color: var(--ark-green-600); }
-.qt-ref    { background: var(--ark-yellow-100, #fef9c3); color: #854d0e; }
-.qt-dealer { background: var(--ark-purple-100); color: var(--ark-purple-700); }
-.qt-error  { background: var(--ark-red-100);    color: var(--ark-red-600); }
-
-.score-val {
-  font-size: var(--fs-12);
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--fw-semibold);
-}
-
-.score-green  { color: var(--ark-green-600); }
-.score-yellow { color: #b45309; }
-.score-red    { color: var(--ark-red-600); }
-.score-none   { color: var(--fg-4); }
 
 .fb-icon { font-size: 15px; }
 
