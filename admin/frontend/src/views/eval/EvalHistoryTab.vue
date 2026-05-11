@@ -235,8 +235,6 @@ defineExpose({ loadRuns, runs })
   gap: var(--sp-6);
 }
 
-
-
 .loading-state {
   padding: var(--sp-8);
   text-align: center;

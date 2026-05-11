@@ -17,7 +17,6 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close'])
 
 const compareData = ref(null)
 const compareLoading = ref(false)
@@ -39,7 +38,6 @@ async function compareLastTwo() {
 
 function handleClose() {
   compareData.value = null
-  emit('close')
 }
 </script>
 
