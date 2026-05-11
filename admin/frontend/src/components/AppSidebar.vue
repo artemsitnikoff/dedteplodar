@@ -23,7 +23,10 @@ function navigate(routeName) {
       <div class="brand-mark">
         <span class="brand-emoji">🔥</span>
       </div>
-      <div class="brand-name">ДедТеплодар</div>
+      <div class="brand-name">
+        ДедТеплодар
+        <span class="brand-version">v1.0</span>
+      </div>
     </div>
 
     <!-- Navigation -->
@@ -183,6 +186,17 @@ function navigate(routeName) {
   font-size: var(--fs-15);
   letter-spacing: var(--ls-tight);
   color: var(--fg-1);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.brand-version {
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  color: var(--fg-3);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .nav {
