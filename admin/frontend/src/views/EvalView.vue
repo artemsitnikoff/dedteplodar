@@ -1,13 +1,9 @@
 <script setup>
-import { ref, onMounted, provide, inject } from 'vue'
+import { ref, onMounted } from 'vue'
 import EvalDatasetTab from '@/views/eval/EvalDatasetTab.vue'
 import EvalRunTab from '@/views/eval/EvalRunTab.vue'
 import EvalHistoryTab from '@/views/eval/EvalHistoryTab.vue'
 
-const toast = inject('toast')
-
-// Provide toast to child components
-provide('toast', toast)
 
 // ── tabs ──────────────────────────────────────────────────────────────────────
 const activeTab = ref('dataset')

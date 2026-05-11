@@ -61,8 +61,9 @@ async function pollRun(runId) {
       toast(data.status === 'done' ? 'Eval завершён' : 'Eval завершился с ошибкой',
             data.status === 'done' ? 'success' : 'error')
     }
-  } catch {
+  } catch (err) {
     // ignore transient errors during polling
+    console.warn('Polling error:', err)
   }
 }
 

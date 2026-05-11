@@ -10,6 +10,10 @@ const props = defineProps({
   isOpen: {
     type: Boolean,
     default: false
+  },
+  colspan: {
+    type: Number,
+    default: 7
   }
 })
 
@@ -61,7 +65,7 @@ function handleLoadAnswer() {
     </td>
   </tr>
   <tr v-if="isOpen" class="answer-row">
-    <td colspan="7">
+    <td :colspan="colspan">
       <div v-if="result.error" class="answer-error">⚠ {{ result.error }}</div>
       <div v-else-if="result.answer" class="answer-body">
         <pre class="answer-text">{{ result.answer }}</pre>
