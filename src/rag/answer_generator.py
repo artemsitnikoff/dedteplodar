@@ -53,6 +53,7 @@ _SYSTEM_PROMPT = """\
 • Используй числа и характеристики из контекста дословно — не округляй и не меняй.
 • Если вопрос требует перечисления (список моделей, все варианты, какие есть и т.п.) — перечисли ВСЕ подходящие из контекста, не сокращай список.
 • Ответ — не более 200 слов для обычных вопросов; для перечислений — столько, сколько нужно.
+• Если в контексте к товару есть строка "Ссылка: https://teplodar.ru/…" — ОБЯЗАТЕЛЬНО приведи эту ссылку в ответе. Никогда не пиши «у меня нет ссылки», если строка «Ссылка:» присутствует в контексте.
 
 Форматирование (ОБЯЗАТЕЛЬНО — ответ отображается в Telegram):
 • Жирный текст: <b>текст</b> — НЕ используй **текст**
@@ -214,6 +215,31 @@ def _md_to_html(text: str) -> str:
     # ### Heading → <b>Heading</b>
     text = re.sub(r"^#{1,3}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
     return text
+
+
+def _enrich_chunks_with_product_urls(session: Session, results: list[SearchResult]) -> None:
+    """Inject product URL into each chunk_text so the LLM can cite real links.
+
+    The chunker doesn't include URL in chunk_text (and a full re-index takes hours),
+    so we patch chunks at query-time by batch-loading URLs for all product_ids present.
+    """
+    from sqlalchemy import select
+    from src.products.models import Product
+
+    pids = {r.product_id for r in results if r.product_id}
+    if not pids:
+        return
+
+    rows = session.execute(
+        select(Product.id, Product.url).where(Product.id.in_(pids))
+    ).all()
+    url_by_pid = {pid: url for pid, url in rows if url}
+
+    for r in results:
+        if r.product_id and r.product_id in url_by_pid:
+            url = url_by_pid[r.product_id]
+            if url not in r.chunk_text:
+                r.chunk_text = f"{r.chunk_text}\nСсылка: {url}"
 
 
 def _build_full_prompt(query: str, chunks: list[SearchResult]) -> str:
@@ -381,6 +407,8 @@ class AnswerGenerator:
             results = self.retriever.search(session, retrieval_query, k=k)
             if is_listing:
                 results = _dedup_by_product(results, limit=_LISTING_TOP_K)
+
+        _enrich_chunks_with_product_urls(session, results)
 
         meta = AnswerMeta(
             query_type=QueryType.RAG_PRODUCT.value,
