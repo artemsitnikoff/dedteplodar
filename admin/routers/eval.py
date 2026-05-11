@@ -77,7 +77,12 @@ async def get_eval_generator():
 
 # ─────────────────────────────────────────────── background task
 
-_EVAL_WORKERS = 4  # parallel Claude CLI subprocesses
+import os as _os
+
+# Parallel Claude CLI subprocesses. Default lowered to 2 — a full Claude CLI
+# call pegs a CPU core, so on small VPS 4 workers starve the HTTP server.
+# Bump via EVAL_WORKERS env on a beefier host.
+_EVAL_WORKERS = int(_os.getenv("EVAL_WORKERS", "2"))
 
 
 def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> dict:
