@@ -217,11 +217,23 @@ def _md_to_html(text: str) -> str:
     return text
 
 
+_LINK_INTENT_RE = re.compile(
+    r"\b(ссылк\w*|url|линк\w*|адрес\s+страниц\w*|на\s+сайт\w*|где\s+(?:купить|посмотреть|найти|заказать)|покажи\s+на\s+сайте)\b",
+    re.IGNORECASE,
+)
+
+
+def _user_wants_link(query: str) -> bool:
+    """True if the user is explicitly asking for a product URL."""
+    return bool(_LINK_INTENT_RE.search(query))
+
+
 def _enrich_chunks_with_product_urls(session: Session, results: list[SearchResult]) -> None:
     """Inject product URL into each chunk_text so the LLM can cite real links.
 
     The chunker doesn't include URL in chunk_text (and a full re-index takes hours),
-    so we patch chunks at query-time by batch-loading URLs for all product_ids present.
+    so we patch chunks at query-time. Only called when the user explicitly asks for
+    a link — otherwise URLs would pollute every product answer.
     """
     from sqlalchemy import select
     from src.products.models import Product
@@ -408,7 +420,8 @@ class AnswerGenerator:
             if is_listing:
                 results = _dedup_by_product(results, limit=_LISTING_TOP_K)
 
-        _enrich_chunks_with_product_urls(session, results)
+        if _user_wants_link(query):
+            _enrich_chunks_with_product_urls(session, results)
 
         meta = AnswerMeta(
             query_type=QueryType.RAG_PRODUCT.value,
