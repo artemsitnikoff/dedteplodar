@@ -226,18 +226,16 @@ def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> di
     t0 = time.monotonic()
     actual_type = top_score = chunks_used = answer = error = None
 
-    session = SessionLocal()
-    try:
-        answer_text, meta = generator.answer_with_meta(session, item["question"])
-        actual_type = meta.query_type
-        top_score = meta.top_score
-        chunks_used = meta.chunks_used
-        answer = answer_text
-    except Exception as exc:
-        error = str(exc)[:1000]
-        logger.error("[eval] run=%s q=%s failed: %s", run_id, item["id"], exc)
-    finally:
-        session.close()
+    with SessionLocal() as session:
+        try:
+            answer_text, meta = generator.answer_with_meta(session, item["question"])
+            actual_type = meta.query_type
+            top_score = meta.top_score
+            chunks_used = meta.chunks_used
+            answer = answer_text
+        except Exception as exc:
+            error = str(exc)[:1000]
+            logger.error("[eval] run=%s q=%s failed: %s", run_id, item["id"], exc)
 
     latency_ms = int((time.monotonic() - t0) * 1000)
 
@@ -257,18 +255,16 @@ def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> di
 
     # Serialize DB writes — SQLite doesn't support concurrent writes
     with db_lock:
-        write_session = SessionLocal()
-        try:
-            write_session.add(result_row)
-            run = write_session.get(EvalRun, run_id)
-            if run:
-                run.completed += 1
-            write_session.commit()
-        except Exception as exc:
-            logger.error("[eval] DB write failed for q=%s: %s", item["id"], exc)
-            write_session.rollback()
-        finally:
-            write_session.close()
+        with SessionLocal() as write_session:
+            try:
+                write_session.add(result_row)
+                run = write_session.get(EvalRun, run_id)
+                if run:
+                    run.completed += 1
+                write_session.commit()
+            except Exception as exc:
+                logger.error("[eval] DB write failed for q=%s: %s", item["id"], exc)
+                write_session.rollback()
 
     logger.info("[eval] run=%s q=%s done in %dms", run_id, item["id"], latency_ms)
     return {"id": item["id"], "latency_ms": latency_ms, "error": error}
@@ -284,9 +280,7 @@ def run_eval_background(run_id: int) -> None:
         )
         # Mark run as failed so the UI doesn't show it as running forever
         _mark_run_failed(run_id, note="Generator not initialised")
-        raise RuntimeError(
-            "Generator not initialized. Call get_eval_generator() before background task."
-        )
+        return
     generator = _generator
 
     db_lock = threading.Lock()
@@ -306,15 +300,12 @@ def run_eval_background(run_id: int) -> None:
 
         # Mark run done
         with db_lock:
-            session = SessionLocal()
-            try:
+            with SessionLocal() as session:
                 run = session.get(EvalRun, run_id)
                 if run:
                     run.status = "done"
                     session.commit()
                 logger.info("[eval] run=%s finished", run_id)
-            finally:
-                session.close()
 
     except Exception as exc:
         logger.exception("[eval] run=%s crashed: %s", run_id, exc)
