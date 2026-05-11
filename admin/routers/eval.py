@@ -275,22 +275,6 @@ def _compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict
     return aggregates
 
 
-def _compute_aggregates(db: Session, run_id: int) -> dict[str, Any]:
-    """Compute per-run aggregates: avg_score, type_accuracy, errors, latency, composite quality.
-
-    Legacy wrapper for backward compatibility.
-    """
-    batch_result = _compute_aggregates_batch(db, [run_id])
-    return batch_result.get(run_id, {
-        "avg_score": None,
-        "type_accuracy": None,
-        "error_count": 0,
-        "error_rate": None,
-        "avg_latency_ms": None,
-        "quality_score": None,
-    })
-
-
 def _serialise_run(run: EvalRun, aggregates: dict[str, Any] | None = None) -> dict[str, Any]:
     base = {
         "id": run.id,
@@ -303,22 +287,6 @@ def _serialise_run(run: EvalRun, aggregates: dict[str, Any] | None = None) -> di
     if aggregates is not None:
         base.update(aggregates)
     return base
-
-
-def _serialise_result(r: EvalResult) -> dict[str, Any]:
-    return {
-        "id": r.id,
-        "question_id": r.question_id,
-        "question": r.question,
-        "category": r.category,
-        "expected_type": r.expected_type,
-        "actual_type": r.actual_type,
-        "top_score": r.top_score,
-        "chunks_used": r.chunks_used,
-        "answer": r.answer,
-        "latency_ms": r.latency_ms,
-        "error": r.error,
-    }
 
 
 def _serialise_result_without_answer(r: EvalResult) -> dict[str, Any]:
@@ -426,14 +394,15 @@ async def get_run_progress(run_id: int, db: Session = Depends(get_db)):
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # Only compute aggregates if run is completed
-    aggregates = {}
-    if run.status == "done":
-        aggregates = _compute_aggregates(db, run_id)
+    # Only compute aggregates if run is completed — running runs have no
+    # meaningful averages yet, and we skip the SQL roundtrip during polling.
+    aggregates = (
+        _compute_aggregates_batch(db, [run_id])[run_id]
+        if run.status == "done"
+        else None
+    )
 
-    return {
-        **_serialise_run(run, aggregates=aggregates if aggregates else None),
-    }
+    return _serialise_run(run, aggregates=aggregates)
 
 
 @router.get("/runs/{run_id}", response_model=RunDetailResponse)

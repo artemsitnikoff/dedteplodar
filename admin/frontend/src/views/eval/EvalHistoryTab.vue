@@ -138,7 +138,7 @@ function formatDate(iso) {
 
 onMounted(loadRuns)
 
-defineExpose({ loadRuns })
+defineExpose({ loadRuns, runs })
 </script>
 
 <template>

@@ -33,16 +33,19 @@ _stats_cache_lock = threading.Lock()
 
 
 def _get_stats_cached(db: Session) -> PipelineStats:
-    """Get pipeline stats with TTL cache. Thread-safe under uvicorn workers."""
+    """Get pipeline stats with TTL cache. Thread-safe with double-checked locking:
+    concurrent cache misses don't run N parallel SQL roundtrips — only the first
+    one queries, the rest re-read the freshly populated cache under the lock.
+    """
     global _stats_cache, _stats_cache_timestamp
 
-    # Fast path — read under lock, copy out
+    # Fast path — happy case, cache hit
     with _stats_cache_lock:
         if _stats_cache and (time.time() - _stats_cache_timestamp) < _STATS_CACHE_TTL:
             return PipelineStats(**_stats_cache)
 
-    # Cache miss — compute fresh stats outside the lock so concurrent
-    # readers don't block on a SQLite roundtrip.
+    # Cache miss — compute outside the lock so we don't block uvicorn threads
+    # on a SQLite roundtrip while holding it.
     products_count = db.execute(select(func.count(Product.id))).scalar()
     categories_count = db.execute(select(func.count(Category.id))).scalar()
     documents_count = db.execute(select(func.count(Document.id))).scalar()
@@ -68,7 +71,6 @@ def _get_stats_cached(db: Session) -> PipelineStats:
         ).scalar_one_or_none()
         last_indexed = last_chunk.isoformat() if last_chunk else None
 
-    # Cache the result under lock (atomic swap)
     fresh = {
         "products": products_count,
         "categories": categories_count,
@@ -77,7 +79,11 @@ def _get_stats_cached(db: Session) -> PipelineStats:
         "index_versions": index_versions,
         "last_indexed": last_indexed,
     }
+    # Double-checked: if another thread filled the cache while we were
+    # running SQL, prefer its already-fresh value.
     with _stats_cache_lock:
+        if _stats_cache and (time.time() - _stats_cache_timestamp) < _STATS_CACHE_TTL:
+            return PipelineStats(**_stats_cache)
         _stats_cache = fresh
         _stats_cache_timestamp = time.time()
 
