@@ -54,7 +54,7 @@ class Intent:
 
 
 _PROMPT = """Ты — анализатор запросов покупателя интернет-магазина «Теплодар» (печи, котлы, камины).
-Прочитай вопрос пользователя и верни СТРОГО JSON со следующими полями:
+Прочитай вопрос пользователя в контексте недавнего диалога и верни СТРОГО JSON со следующими полями:
 
 {{
   "intent": "RAG_PRODUCT" | "FAQ_COMPANY" | "FAQ_DEALER",
@@ -81,6 +81,7 @@ _PROMPT = """Ты — анализатор запросов покупателя
 4. **wants_link**: true только если пользователь явно просит ссылку, URL, адрес страницы, «покажи на сайте», «дай линк». Просто «где купить» — false.
 
 5. **reformulated_query**: переписать вопрос в технический поисковый запрос (1-2 предложения), убрав разговорные обороты. **СОХРАНИ дословно**: цифры, размеры, названия моделей, и тип товара (если в вопросе сказано «печь» — оставь «печь», не заменяй на «оборудование», «прибор», «устройство»). Не добавляй бренды/модели, которых нет в вопросе. Если в вопросе модель — обязательно включи её. Не добавляй смежные категории («горелка», «автоматика», «дымоход»), если их нет в вопросе.
+   **ВАЖНО про контекст диалога**: если текущий вопрос содержит анафоры («первая», «эта», «такая же», «он», «она», «они», «тот», «эту», «вторая», «у неё», «к ней», «дешевле», «полегче», «и его»), РАСКРОЙ их в `reformulated_query`, подставив конкретные сущности из истории. Например: история «Какие есть Русь?» → ответ упомянул Русь-9 Л, Русь-12 Л, Русь-18 Л; текущий вопрос «сколько весит первая?» → `reformulated_query: "Сколько весит банная печь Русь-9 Л, её вес"`. Если текущий вопрос **самодостаточен** (явно новая тема, есть конкретное название) — историю игнорируй.
 
 6. **product_mention**: если пользователь явно назвал модель («Русь-12 Л», «Метеор 150», «Куппер ОВК 9») — верни как есть. Иначе null.
 
@@ -91,7 +92,10 @@ _PROMPT = """Ты — анализатор запросов покупателя
 FAQ:
 {faq_list}
 
-Вопрос пользователя: {query}
+Контекст диалога (последние сообщения, oldest first):
+{history_block}
+
+Вопрос пользователя (текущий): {query}
 
 Верни ТОЛЬКО валидный JSON. Без markdown, без объяснений, без префиксов."""
 
@@ -99,13 +103,33 @@ FAQ:
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def _format_history(history: list[dict] | None) -> str:
+    """Render dialog turns for the prompt. Returns '(пусто)' if no history."""
+    if not history:
+        return "(пусто — это первое сообщение)"
+    lines = []
+    for turn in history:
+        role = "Пользователь" if turn.get("role") == "user" else "Бот"
+        content = (turn.get("content") or "").strip()
+        # Cap each turn so a single long bot answer doesn't blow the prompt
+        if len(content) > 500:
+            content = content[:500] + "…"
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
 def extract_intent(
     query: str,
     faq_entries: list,
     cli_path: str = "claude",
     model: str = "",
+    history: list[dict] | None = None,
 ) -> Optional[Intent]:
     """Run one Haiku call and parse the intent envelope.
+
+    `history` is a list of `{role, content}` dicts (oldest first) used to
+    resolve anaphora in the reformulated query. Pass [] / None for a
+    stateless call.
 
     Returns None on any failure (timeout, bad JSON, subprocess error) so
     callers can fall back to the legacy regex/cosine pipeline.
@@ -116,7 +140,11 @@ def extract_intent(
     faq_list = "\n".join(
         f"{i + 1}. {e.question.strip()}" for i, e in enumerate(faq_entries)
     ) or "(нет записей)"
-    prompt = _PROMPT.format(faq_list=faq_list, query=query.strip())
+    prompt = _PROMPT.format(
+        faq_list=faq_list,
+        history_block=_format_history(history),
+        query=query.strip(),
+    )
 
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)

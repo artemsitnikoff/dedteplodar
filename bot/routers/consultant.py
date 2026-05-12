@@ -179,9 +179,9 @@ async def _typing_loop(bot, chat_id: int, stop: asyncio.Event) -> None:
         await asyncio.sleep(4)
 
 
-def _call_generator(query: str) -> tuple[str, AnswerMeta]:
+def _call_generator(query: str, user_id: int) -> tuple[str, AnswerMeta]:
     with SessionLocal() as session:
-        return _generator.answer_with_meta(session, query)
+        return _generator.answer_with_meta(session, query, user_id=user_id)
 
 
 @router.message(StateFilter(None), F.text)
@@ -198,7 +198,7 @@ async def handle_question(message: Message) -> None:
     typing_task = asyncio.create_task(_typing_loop(message.bot, message.chat.id, stop_event))
 
     try:
-        answer, meta = await asyncio.to_thread(_call_generator, query)
+        answer, meta = await asyncio.to_thread(_call_generator, query, message.from_user.id)
     except Exception as e:
         logger.error("Generator error: %s", e, exc_info=True)
         answer = (

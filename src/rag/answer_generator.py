@@ -254,13 +254,35 @@ def _enrich_chunks_with_product_urls(session: Session, results: list[SearchResul
                 r.chunk_text = f"{r.chunk_text}\nСсылка: {url}"
 
 
+def _format_history_for_prompt(history: list[dict] | None) -> str | None:
+    """Render dialog turns for the final answer prompt. None if empty."""
+    if not history:
+        return None
+    lines = []
+    for turn in history:
+        role = "Пользователь" if turn.get("role") == "user" else "Бот"
+        content = (turn.get("content") or "").strip()
+        if len(content) > 600:
+            content = content[:600] + "…"
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
 def _build_full_prompt(
     query: str,
     chunks: list[SearchResult],
     dealer_block: str | None = None,
+    history: list[dict] | None = None,
 ) -> str:
-    """Combine system prompt + FAQ + RAG chunks + (optional) dealer info + query."""
+    """Combine system prompt + FAQ + (optional) dialog history + RAG chunks +
+    (optional) dealer info + current user query."""
     parts = [_SYSTEM_PROMPT, "", _FAQ_TEXT, ""]
+    history_block = _format_history_for_prompt(history)
+    if history_block:
+        parts.append(
+            "Предыдущие сообщения в диалоге (для понимания контекста):\n"
+            f"{history_block}\n"
+        )
     if chunks:
         fragments = "\n\n".join(
             f"[{i+1}] (тип: {c.chunk_type})\n{c.chunk_text.strip()}"
@@ -269,7 +291,7 @@ def _build_full_prompt(
         parts.append(f"Фрагменты из базы знаний:\n{fragments}\n")
     if dealer_block:
         parts.append(f"Информация о магазинах в городе:\n{dealer_block}\n")
-    parts.append(f"Вопрос: {query}")
+    parts.append(f"Текущий вопрос пользователя: {query}")
     return "\n".join(parts)
 
 
@@ -357,19 +379,29 @@ class AnswerGenerator:
         answer, _ = self.answer_with_meta(session, query)
         return answer
 
-    def answer_with_meta(self, session: Session, query: str) -> tuple[str, AnswerMeta]:
+    def answer_with_meta(
+        self,
+        session: Session,
+        query: str,
+        user_id: int | None = None,
+    ) -> tuple[str, AnswerMeta]:
         """Return (answer_text, metadata).
 
         Pipeline:
-          1. Single Haiku call → Intent envelope (classify + FAQ match +
-             reformulate + city + wants_link in one shot).
-          2. If intent.faq_match_id → return that FAQ answer.
-          3. Otherwise route by intent.intent to the right handler.
-          4. Fallback to legacy regex/cosine pipeline if Haiku fails.
+          1. Pull last 3 Q&A turns for this user from query_logs (within 30
+             minutes) to resolve anaphora ("первая", "она", "та").
+          2. Single Haiku call → Intent envelope (classify + FAQ match +
+             reformulate-with-history-context + city + wants_link + listing).
+          3. If intent.faq_match_id → return that FAQ answer.
+          4. Otherwise route by intent.intent to the right handler.
+          5. Fallback to legacy regex/cosine pipeline if Haiku fails.
         """
         from .intent_extractor import extract_intent
+        from src.logs.queries import get_recent_dialog
 
         t0 = time.monotonic()
+
+        history = get_recent_dialog(user_id) if user_id else []
 
         faq_entries = self.faq_matcher._entries if self.faq_matcher else []
         intent = extract_intent(
@@ -377,6 +409,7 @@ class AnswerGenerator:
             faq_entries,
             cli_path=self.cli_path,
             model=self.reformulation_model,
+            history=history,
         )
 
         if intent is None:
@@ -395,10 +428,10 @@ class AnswerGenerator:
         if intent.intent == "FAQ_DEALER":
             answer, meta = self._handle_dealer_meta(query, city_hint=intent.city)
         elif intent.intent == "FAQ_COMPANY":
-            answer = "".join(self._call_claude(query, chunks=[]))
+            answer = "".join(self._call_claude(query, chunks=[], history=history))
             meta = AnswerMeta(query_type="FAQ_COMPANY")
         else:
-            answer, meta = self._handle_rag_meta(session, query, intent=intent)
+            answer, meta = self._handle_rag_meta(session, query, intent=intent, history=history)
 
         meta.latency_ms = int((time.monotonic() - t0) * 1000)
         return answer, meta
@@ -445,7 +478,7 @@ class AnswerGenerator:
             meta,
         )
 
-    def _handle_rag_meta(self, session: Session, query: str, intent=None) -> tuple[str, AnswerMeta]:
+    def _handle_rag_meta(self, session: Session, query: str, intent=None, history=None) -> tuple[str, AnswerMeta]:
         # Use the LLM-reformulated query if intent extractor produced one,
         # otherwise call the legacy reformulator (used by the fallback path).
         if intent and intent.reformulated_query:
@@ -519,22 +552,34 @@ class AnswerGenerator:
             shops_count=len(shops) if dealer_block else 0,
         )
         # Answer uses the original query so the LLM sees natural language
-        answer = "".join(self._call_claude(query, chunks=results, dealer_block=dealer_block))
+        answer = "".join(self._call_claude(query, chunks=results, dealer_block=dealer_block, history=history))
         return answer, meta
 
     # ─────────────────────────────────────────────── LLM dispatch
 
-    def _call_claude(self, query: str, chunks: list[SearchResult], dealer_block: str | None = None) -> Iterator[str]:
+    def _call_claude(
+        self, query: str, chunks: list[SearchResult],
+        dealer_block: str | None = None,
+        history: list[dict] | None = None,
+    ) -> Iterator[str]:
         if self.mode == "cli":
-            yield from self._call_cli_mode(query, chunks, dealer_block)
+            yield from self._call_cli_mode(query, chunks, dealer_block, history)
         else:
-            yield from self._call_api_mode(query, chunks, dealer_block)
+            yield from self._call_api_mode(query, chunks, dealer_block, history)
 
-    def _call_cli_mode(self, query: str, chunks: list[SearchResult], dealer_block: str | None = None) -> Iterator[str]:
-        prompt = _build_full_prompt(query, chunks, dealer_block)
+    def _call_cli_mode(
+        self, query: str, chunks: list[SearchResult],
+        dealer_block: str | None = None,
+        history: list[dict] | None = None,
+    ) -> Iterator[str]:
+        prompt = _build_full_prompt(query, chunks, dealer_block, history)
         yield _md_to_html(_call_cli(prompt, self.cli_path))
 
-    def _call_api_mode(self, query: str, chunks: list[SearchResult], dealer_block: str | None = None) -> Iterator[str]:
+    def _call_api_mode(
+        self, query: str, chunks: list[SearchResult],
+        dealer_block: str | None = None,
+        history: list[dict] | None = None,
+    ) -> Iterator[str]:
         user_content = query
         if chunks:
             fragments = "\n\n".join(
@@ -544,6 +589,12 @@ class AnswerGenerator:
             user_content = f"Фрагменты из базы знаний:\n{fragments}\n\nВопрос: {query}"
         if dealer_block:
             user_content = f"Информация о магазинах в городе:\n{dealer_block}\n\n{user_content}"
+        history_block = _format_history_for_prompt(history)
+        if history_block:
+            user_content = (
+                f"Предыдущие сообщения в диалоге (для понимания контекста):\n"
+                f"{history_block}\n\n{user_content}"
+            )
 
         with self._api_client.messages.stream(
             model=self._model,
