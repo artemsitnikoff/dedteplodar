@@ -358,14 +358,53 @@ class AnswerGenerator:
         return answer
 
     def answer_with_meta(self, session: Session, query: str) -> tuple[str, AnswerMeta]:
-        """Return (answer_text, metadata). Use this when you need retrieval info."""
+        """Return (answer_text, metadata).
+
+        Pipeline:
+          1. Single Haiku call → Intent envelope (classify + FAQ match +
+             reformulate + city + wants_link in one shot).
+          2. If intent.faq_match_id → return that FAQ answer.
+          3. Otherwise route by intent.intent to the right handler.
+          4. Fallback to legacy regex/cosine pipeline if Haiku fails.
+        """
+        from .intent_extractor import extract_intent
+
         t0 = time.monotonic()
 
-        # Fast path: check hand-curated FAQ first (no LLM call)
-        # FaqMatcher now validates product-token overlap internally, so it's
-        # safe to run on every query (incl. product ones). E5 cosine alone
-        # would match "Расскажи о Русь" to "Расскажи о Былина" — token check
-        # filters those out before the wrong answer is returned.
+        faq_entries = self.faq_matcher._entries if self.faq_matcher else []
+        intent = extract_intent(
+            query,
+            faq_entries,
+            cli_path=self.cli_path,
+            model=self.reformulation_model,
+        )
+
+        if intent is None:
+            # LLM failed — degrade to the old code path so the user still gets an answer.
+            answer, meta = self._answer_legacy(session, query, t0)
+            return answer, meta
+
+        # 1) FAQ match takes precedence
+        if intent.faq_match_id is not None and self.faq_matcher:
+            entry = self.faq_matcher._entries[intent.faq_match_id]
+            meta = AnswerMeta(query_type="FAQ_EXACT", top_score=1.0)
+            meta.latency_ms = int((time.monotonic() - t0) * 1000)
+            return entry.answer, meta
+
+        # 2) Routed handlers — they take pre-extracted data from `intent`
+        if intent.intent == "FAQ_DEALER":
+            answer, meta = self._handle_dealer_meta(query, city_hint=intent.city)
+        elif intent.intent == "FAQ_COMPANY":
+            answer = "".join(self._call_claude(query, chunks=[]))
+            meta = AnswerMeta(query_type="FAQ_COMPANY")
+        else:
+            answer, meta = self._handle_rag_meta(session, query, intent=intent)
+
+        meta.latency_ms = int((time.monotonic() - t0) * 1000)
+        return answer, meta
+
+    def _answer_legacy(self, session: Session, query: str, t0: float) -> tuple[str, AnswerMeta]:
+        """Fallback path used when the LLM intent extractor errors out."""
         if self.faq_matcher:
             match = self.faq_matcher.find(query)
             if match:
@@ -374,8 +413,7 @@ class AnswerGenerator:
                 return match.answer, meta
 
         qtype = classify(query)
-        logger.debug(f"[{self.mode}] {qtype.value} | {query[:60]}")
-
+        logger.debug(f"[legacy {self.mode}] {qtype.value} | {query[:60]}")
         if qtype == QueryType.FAQ_DEALER:
             answer, meta = self._handle_dealer_meta(query)
         elif qtype == QueryType.FAQ_COMPANY:
@@ -383,7 +421,6 @@ class AnswerGenerator:
             meta = AnswerMeta(query_type=qtype.value)
         else:
             answer, meta = self._handle_rag_meta(session, query)
-
         meta.latency_ms = int((time.monotonic() - t0) * 1000)
         return answer, meta
 
@@ -393,8 +430,10 @@ class AnswerGenerator:
 
     # ─────────────────────────────────────────────── handlers
 
-    def _handle_dealer_meta(self, query: str) -> tuple[str, AnswerMeta]:
-        city = _extract_city(query)
+    def _handle_dealer_meta(self, query: str, city_hint: str | None = None) -> tuple[str, AnswerMeta]:
+        # Intent extractor already normalises the city to nominative case; use
+        # it if provided, otherwise fall back to the regex extractor.
+        city = city_hint or _extract_city(query)
         meta = AnswerMeta(query_type=QueryType.FAQ_DEALER.value, city=city)
         if city:
             matched_city, shops = find_dealers(city)
@@ -406,11 +445,19 @@ class AnswerGenerator:
             meta,
         )
 
-    def _handle_rag_meta(self, session: Session, query: str) -> tuple[str, AnswerMeta]:
-        # Reformulate colloquial query into retrieval-optimised form
-        retrieval_query = reformulate(query, self.cli_path, self.reformulation_model)
+    def _handle_rag_meta(self, session: Session, query: str, intent=None) -> tuple[str, AnswerMeta]:
+        # Use the LLM-reformulated query if intent extractor produced one,
+        # otherwise call the legacy reformulator (used by the fallback path).
+        if intent and intent.reformulated_query:
+            retrieval_query = intent.reformulated_query
+        else:
+            retrieval_query = reformulate(query, self.cli_path, self.reformulation_model)
 
-        is_listing = _is_listing_query(query) or _is_listing_query(retrieval_query)
+        # Listing flag from intent (LLM decided) or legacy regex fallback.
+        is_listing = (
+            intent.is_listing if intent
+            else (_is_listing_query(query) or _is_listing_query(retrieval_query))
+        )
         k = _LISTING_TOP_K if is_listing else self.top_k
 
         # Expand kW range ("12-15 кВт") into per-value queries and merge results
@@ -430,14 +477,17 @@ class AnswerGenerator:
             if is_listing:
                 results = _dedup_by_product(results, limit=_LISTING_TOP_K)
 
-        if _user_wants_link(query):
+        # wants_link from intent (LLM-decided) or regex fallback
+        wants_link = intent.wants_link if intent else _user_wants_link(query)
+        if wants_link:
             _enrich_chunks_with_product_urls(session, results)
 
-        # Compound-intent merge: if the user names a city, inject the dealer
-        # block alongside the product chunks so a single RAG answer can cover
-        # both "что за товар" and "где купить".
+        # Compound merge: if the user named a city, inject the dealer block
+        # so one RAG answer covers both "что за товар" and "где купить".
         dealer_block: str | None = None
-        city = _extract_city(query)
+        matched_city: str | None = None
+        shops: list = []
+        city = (intent.city if intent else None) or _extract_city(query)
         if city:
             matched_city, shops = find_dealers(city)
             if matched_city and shops:

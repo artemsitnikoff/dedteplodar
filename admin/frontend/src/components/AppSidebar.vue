@@ -25,7 +25,7 @@ function navigate(routeName) {
       </div>
       <div class="brand-name">
         ДедТеплодар
-        <span class="brand-version">v1.0</span>
+        <span class="brand-version">v1.1</span>
       </div>
     </div>
 

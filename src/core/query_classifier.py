@@ -51,8 +51,12 @@ _FAQ_DEALER_PATTERNS = [
     r"\bпартнёр",         # партнёр, партнёры, партнёрах
     r"\bпартнер",
     r"\bкупить\b.*\bгород",
-    r"\bгде\s+купить\b",
-    r"\bгде\s+найти\b",
+    # "где [можно/лучше/удобно/...] купить" — optional adverb between где/купить
+    r"\bгде\s+(?:\w+\s+){0,2}купить\b",
+    r"\bгде\s+(?:\w+\s+){0,2}найти\b",
+    r"\bгде\s+(?:\w+\s+){0,2}заказать\b",
+    r"\bгде\s+(?:\w+\s+){0,2}приобрести\b",
+    r"\bгде\s+(?:\w+\s+){0,2}посмотреть\b",
     r"\bадрес",           # адрес, адреса, адресов
     r"\bнаход[и]",        # находится, находятся
     r"\bсамовывоз",
@@ -121,9 +125,22 @@ _RE_RAG_OVERRIDE = [re.compile(p, re.I) for p in _RAG_OVERRIDE_PATTERNS]
 _RE_RAG_OVERRIDE_CASE = [re.compile(p) for p in _RAG_OVERRIDE_CASE_PATTERNS]
 
 
+_WHERE_PURCHASE_RE = re.compile(
+    r"\bгде\s+(?:\w+\s+){0,3}"
+    r"(купить|найти|заказать|приобрест|посмотреть|выбрать|забрать)",
+    re.IGNORECASE,
+)
+
+
 def classify(query: str) -> QueryType:
     """Classify query into FAQ_COMPANY | FAQ_DEALER | RAG_PRODUCT."""
     q = query.strip()
+
+    # Strict dealer intent FIRST — "где [можно/...] купить + известный город"
+    # beats every other signal, including RAG_OVERRIDE's generic "печь/котёл".
+    # The user explicitly asked WHERE; product nouns are just inventory.
+    if _WHERE_PURCHASE_RE.search(q) and _mentions_known_dealer_city(q):
+        return QueryType.FAQ_DEALER
 
     # If query mentions a specific product/model → always RAG, even if company
     # keywords (гарантия, доставка…) are also present.
@@ -143,4 +160,38 @@ def classify(query: str) -> QueryType:
         if pat.search(q):
             return QueryType.FAQ_DEALER
 
+    # Looser fallback: any purchase-intent + known dealer city, no "где" needed
+    # (covers "купить в Краснодаре", "заказать в Самаре").
+    if _has_purchase_intent(q) and _mentions_known_dealer_city(q):
+        return QueryType.FAQ_DEALER
+
     return QueryType.RAG_PRODUCT
+
+
+_PURCHASE_INTENT_RE = re.compile(
+    r"\b(купить|приобрест|заказать|найти|посмотреть|выбрать|забрать|самовывоз|покупк)",
+    re.IGNORECASE,
+)
+
+
+def _has_purchase_intent(query: str) -> bool:
+    return bool(_PURCHASE_INTENT_RE.search(query))
+
+
+def _mentions_known_dealer_city(query: str) -> bool:
+    """True if the query mentions a city that exists in our dealers DB.
+
+    Late import + lazy lookup so the classifier module stays cheap to import
+    in tests / standalone tooling.
+    """
+    try:
+        from src.core.dealer_lookup import find_dealers
+        # _extract_city lives in answer_generator; replicate the simplest case
+        # here: take any "в <CapWord>" or known multi-word city pattern.
+        m = re.search(r"\bв\s+([А-ЯЁа-яёA-Za-z][а-яёa-z\-]+(?:[\s-][А-ЯЁА-яёa-z][а-яёa-z\-]+)?)", query)
+        if not m:
+            return False
+        matched_city, shops = find_dealers(m.group(1))
+        return bool(matched_city and shops)
+    except Exception:
+        return False
