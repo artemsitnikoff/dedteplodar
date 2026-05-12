@@ -20,6 +20,33 @@ const totalPages = computed(() => Math.ceil(total.value / perPage))
 
 const selected = ref(null)
 const faqSaving = ref(false)
+const contextTurns = ref([])
+const contextLoading = ref(false)
+
+async function openLog(log) {
+  if (selected.value?.id === log.id) {
+    selected.value = null
+    contextTurns.value = []
+    return
+  }
+  selected.value = log
+  contextTurns.value = []
+  if (!log.user_id) return
+  contextLoading.value = true
+  try {
+    const res = await api.getJournalContext(log.id)
+    contextTurns.value = res.data || []
+  } catch {
+    contextTurns.value = []
+  } finally {
+    contextLoading.value = false
+  }
+}
+
+function closeDetail() {
+  selected.value = null
+  contextTurns.value = []
+}
 
 async function addToFaq(log) {
   if (faqSaving.value) return
@@ -165,7 +192,7 @@ function formatTs(ts) {
             :key="log.id"
             class="log-row"
             :class="{ 'row-selected': selected?.id === log.id }"
-            @click="selected = selected?.id === log.id ? null : log"
+            @click="openLog(log)"
           >
             <td class="cell-ts">{{ formatTs(log.ts) }}</td>
             <td><span :class="['qtype-badge', qtypeCls(log.query_type)]">{{ qtypeLabel(log.query_type) }}</span></td>
@@ -197,7 +224,7 @@ function formatTs(ts) {
 
     <!-- Detail panel -->
     <Teleport to="body">
-      <div v-if="selected" class="detail-overlay" @click.self="selected = null">
+      <div v-if="selected" class="detail-overlay" @click.self="closeDetail()">
         <div class="detail-panel">
           <div class="detail-header">
             <div class="detail-meta">
@@ -218,10 +245,30 @@ function formatTs(ts) {
             <button class="faq-add-btn" :disabled="faqSaving" @click="addToFaq(selected)" title="Добавить в FAQ">
             {{ faqSaving ? '...' : '→ FAQ' }}
           </button>
-          <button class="detail-close" @click="selected = null">✕</button>
+          <button class="detail-close" @click="closeDetail()">✕</button>
           </div>
 
           <div class="detail-body">
+            <!-- Dialog context: previous turns from the same user -->
+            <div v-if="contextLoading || contextTurns.length" class="detail-section">
+              <div class="detail-label">Контекст диалога (предыдущие сообщения)</div>
+              <div v-if="contextLoading" class="context-loading">
+                <AjaxFrog text="Загружаю контекст…" size="18px" />
+              </div>
+              <div v-else class="context-thread">
+                <div v-for="turn in contextTurns" :key="turn.id" class="context-turn">
+                  <div class="context-q">
+                    <span class="context-role">Q</span>
+                    <span class="context-content">{{ turn.question }}</span>
+                  </div>
+                  <div class="context-a">
+                    <span class="context-role">A</span>
+                    <span class="context-content">{{ turn.answer }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="detail-section">
               <div class="detail-label">Вопрос</div>
               <div class="detail-text detail-q">{{ selected.question }}</div>
@@ -601,6 +648,73 @@ function formatTs(ts) {
   border-left: 3px solid var(--ark-red-600);
   padding: var(--sp-3);
   border-radius: var(--rad-sm);
+  color: var(--fg-1);
+}
+
+.context-loading {
+  padding: var(--sp-2) 0;
+  color: var(--fg-3);
+}
+
+.context-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: color-mix(in srgb, var(--ark-blue-600) 5%, transparent);
+  border-left: 3px solid var(--ark-blue-600);
+  padding: var(--sp-3);
+  border-radius: var(--rad-sm);
+}
+
+.context-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+}
+
+.context-turn + .context-turn {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed var(--border-1);
+}
+
+.context-q, .context-a {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  line-height: 1.4;
+}
+
+.context-role {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  line-height: 18px;
+  text-align: center;
+  color: white;
+  margin-top: 2px;
+}
+
+.context-q .context-role {
+  background: var(--fg-3);
+}
+
+.context-a .context-role {
+  background: var(--ark-blue-600);
+}
+
+.context-content {
+  color: var(--fg-2);
+  flex: 1;
+  word-break: break-word;
+}
+
+.context-a .context-content {
   color: var(--fg-1);
 }
 

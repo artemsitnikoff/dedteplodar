@@ -89,6 +89,7 @@ export const api = {
 
   // Journal
   getJournal: (params = {}) => client.get('/journal', { params }),
+  getJournalContext: (id) => client.get(`/journal/${id}/context`),
 
   // FAQ Entries
   getFaqEntries: (params = {}) => client.get('/faq-entries', { params }),

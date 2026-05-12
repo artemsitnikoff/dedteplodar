@@ -1,7 +1,8 @@
 """Query logs API router."""
 
-from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from datetime import timedelta
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select, desc
 
@@ -46,3 +47,35 @@ async def list_query_logs(
         page=page,
         per_page=per_page,
     )
+
+
+@router.get("/{log_id}/context", response_model=List[QueryLogItem])
+async def get_dialog_context(
+    log_id: int,
+    limit: int = Query(3, ge=1, le=10),
+    window_minutes: int = Query(30, ge=1, le=240),
+    db: Session = Depends(get_db),
+):
+    """Return up to `limit` previous Q&A turns from the same user_id
+    within `window_minutes` before this log entry. Used by the Journal
+    detail panel to show what the user asked before this turn.
+    """
+    target = db.get(QueryLog, log_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Log entry not found")
+    if not target.user_id:
+        return []
+
+    cutoff = target.ts - timedelta(minutes=window_minutes)
+    prev = db.execute(
+        select(QueryLog)
+        .where(QueryLog.user_id == target.user_id)
+        .where(QueryLog.id != target.id)
+        .where(QueryLog.ts < target.ts)
+        .where(QueryLog.ts >= cutoff)
+        .order_by(desc(QueryLog.ts))
+        .limit(limit)
+    ).scalars().all()
+
+    # Return oldest first so the UI reads top-down like a chat thread
+    return [QueryLogItem.model_validate(r) for r in reversed(prev)]
