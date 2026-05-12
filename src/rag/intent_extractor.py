@@ -46,6 +46,11 @@ class Intent:
     reformulated_query: Optional[str] = None  # retrieval-optimised version for RAG
     product_mention: Optional[str] = None     # specific model the user named, if any
     is_listing: bool = False             # query asks for a list of models, not one
+    comparison_targets: list[str] = None      # ["Русь", "Сахара"] when user compares — fan out retrieval
+
+    def __post_init__(self):
+        if self.comparison_targets is None:
+            self.comparison_targets = []
 
 
 _PROMPT = """Ты — анализатор запросов покупателя интернет-магазина «Теплодар» (печи, котлы, камины).
@@ -58,7 +63,8 @@ _PROMPT = """Ты — анализатор запросов покупателя
   "wants_link": true | false,
   "reformulated_query": "<технический поисковый запрос для базы знаний, 1-2 предложения>",
   "product_mention": null | "<точное название модели, упомянутой пользователем>",
-  "is_listing": true | false
+  "is_listing": true | false,
+  "comparison_targets": [] | ["Русь", "Сахара"]
 }}
 
 Правила:
@@ -79,6 +85,8 @@ _PROMPT = """Ты — анализатор запросов покупателя
 6. **product_mention**: если пользователь явно назвал модель («Русь-12 Л», «Метеор 150», «Куппер ОВК 9») — верни как есть. Иначе null.
 
 7. **is_listing**: true если просят «список / все модели / какие есть / варианты». Иначе false.
+
+8. **comparison_targets**: если вопрос сравнивает несколько товаров / серий («разница X и Y», «X vs Y», «что лучше», «отличие»), верни массив их названий — например ["Русь", "Сахара"], ["Куппер-12", "Куппер-18"]. Если сравнения нет — пустой массив [].
 
 FAQ:
 {faq_list}
@@ -162,6 +170,9 @@ def extract_intent(
     if isinstance(faq_id, int) and 1 <= faq_id <= len(faq_entries):
         faq_id_int = faq_id - 1  # convert to 0-based index for callers
 
+    raw_targets = data.get("comparison_targets") or []
+    comparison_targets = [str(t).strip() for t in raw_targets if str(t).strip()] if isinstance(raw_targets, list) else []
+
     intent = Intent(
         intent=intent_value,
         faq_match_id=faq_id_int,
@@ -170,6 +181,7 @@ def extract_intent(
         reformulated_query=(data.get("reformulated_query") or query).strip() or query,
         product_mention=(data.get("product_mention") or None),
         is_listing=bool(data.get("is_listing")),
+        comparison_targets=comparison_targets,
     )
     logger.debug(
         "intent: %s faq=%s city=%s link=%s listing=%s product=%r",

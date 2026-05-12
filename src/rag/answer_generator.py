@@ -460,11 +460,28 @@ class AnswerGenerator:
         )
         k = _LISTING_TOP_K if is_listing else self.top_k
 
-        # Expand kW range ("12-15 кВт") into per-value queries and merge results
+        # Fan out retrieval for compound queries:
+        # - comparison ("Русь vs Сахара") — one search per product family,
+        #   otherwise top-k ranks chunks of one family and the other vanishes
+        # - kW range ("12-15 кВт")        — one search per value
+        # - plain query                   — one search
+        comparison_targets = (intent.comparison_targets if intent else []) or []
         sub_queries = _expand_kw_range(retrieval_query)
-        if len(sub_queries) > 1:
+
+        if comparison_targets:
             all_results: list[SearchResult] = []
-            per_k = max(k, 6)  # at least 6 per sub-query
+            per_k = max(k, 6)
+            seen_ids: set[int] = set()
+            for target in comparison_targets:
+                target_query = f"{target} {retrieval_query}"
+                for r in self.retriever.search(session, target_query, k=per_k):
+                    if r.id not in seen_ids:
+                        seen_ids.add(r.id)
+                        all_results.append(r)
+            results = _dedup_by_product(all_results, limit=_LISTING_TOP_K)
+        elif len(sub_queries) > 1:
+            all_results: list[SearchResult] = []
+            per_k = max(k, 6)
             seen_ids: set[int] = set()
             for sq in sub_queries:
                 for r in self.retriever.search(session, sq, k=per_k):
