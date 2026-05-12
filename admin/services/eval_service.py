@@ -60,7 +60,11 @@ def _init_generator_sync():
         data_dir="base",
         product_boost=settings.product_boost,
     )
-    faq_matcher = FaqMatcher(embedder=embedder)
+    faq_matcher = FaqMatcher(
+        embedder=embedder,
+        cli_path=settings.claude_cli_path,
+        llm_model=settings.claude_reformulation_model,
+    )
     generator = AnswerGenerator(
         retriever=retriever,
         mode="cli",

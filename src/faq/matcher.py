@@ -10,58 +10,46 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+import os
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from sqlalchemy.orm import Session
 
 from src.core.database import SessionLocal
 from src.faq.models import FaqEntry
 
 logger = logging.getLogger(__name__)
 
-THRESHOLD = 0.92          # minimum cosine similarity to consider a FAQ match
+THRESHOLD = 0.92          # minimum cosine similarity (legacy fast-path, unused by default)
 RELOAD_INTERVAL = 60.0    # seconds between DB reloads
+LLM_TIMEOUT = 20          # seconds — LLM matcher subprocess timeout
 
-# Product-family names from the catalog. If a query mentions any of these
-# tokens, a candidate FAQ answer must mention the same token — otherwise
-# embeddings are matching question STRUCTURE ("Расскажи о X") and not the
-# actual model, and we'd serve specs of the wrong product.
-_PRODUCT_TOKENS = (
-    "спутник", "куппер", "кузбасс", "каскад", "русь", "сахара", "сибирь",
-    "тамань", "былина", "утёс", "утес", "панорама", "профи", "тарий",
-    "метеор", "вертикаль", "печурка", "кадриль", "танго", "румба",
-    "сиеста", "компар", "топ-драйв", "топ-модель", "топдрайв", "топмодель",
+_LLM_PROMPT = """Ты — классификатор вопросов. Дан список FAQ-записей и вопрос пользователя.
+
+FAQ:
+{faq_list}
+
+Вопрос пользователя: {query}
+
+Какая FAQ-запись по СМЫСЛУ отвечает на этот вопрос?
+
+Правила:
+- Если в вопросе названа конкретная модель/город/название — FAQ-запись должна быть про ту же сущность. Разные модели (Русь vs Былина, Русь-12 vs Русь-18) — НЕ матч.
+- Если вопрос общий (доставка, гарантия, оплата, о компании) — подходит любая запись на ту же тему.
+- Если ни одна запись не отвечает точно — ответ NONE.
+
+Верни ТОЛЬКО номер записи (например "3") или слово NONE. Ничего больше, без объяснений."""
+
+_DISALLOWED_TOOLS = (
+    "Bash,BashOutput,KillShell,"
+    "Read,Write,Edit,MultiEdit,NotebookEdit,"
+    "Glob,Grep,"
+    "WebFetch,WebSearch,"
+    "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
 )
-_PRODUCT_TOKEN_RE = re.compile(
-    r"\b(" + "|".join(re.escape(t) for t in _PRODUCT_TOKENS) + r")\b",
-    re.IGNORECASE,
-)
-# Model-number tokens like "12", "150" that follow a model name
-_NUMBER_TOKEN_RE = re.compile(r"\b\d{2,3}\b")
-
-
-def _product_tokens_compatible(q1: str, q2: str) -> bool:
-    """True if both texts agree on product family + main model number, or
-    if neither mentions any product token at all.
-
-    Rejects pairs where the user asks about Русь-12 but the FAQ is about
-    Былина (different family) OR about Русь-18 (different number).
-    """
-    fam1 = {m.group(0).lower() for m in _PRODUCT_TOKEN_RE.finditer(q1)}
-    fam2 = {m.group(0).lower() for m in _PRODUCT_TOKEN_RE.finditer(q2)}
-    if fam1 or fam2:
-        if not (fam1 & fam2):
-            return False
-
-    nums1 = set(_NUMBER_TOKEN_RE.findall(q1))
-    nums2 = set(_NUMBER_TOKEN_RE.findall(q2))
-    if nums1 and nums2 and not (nums1 & nums2):
-        return False
-    return True
 
 
 @dataclass
@@ -73,48 +61,105 @@ class FaqMatch:
 
 
 class FaqMatcher:
-    """Semantic FAQ lookup backed by E5 embeddings."""
+    """FAQ lookup via LLM (Haiku) over the full FAQ list.
 
-    def __init__(self, embedder):
+    Why LLM and not pure embeddings: E5 cosine matches question STRUCTURE
+    ("Расскажи о X" → "Расскажи о Y") far too aggressively — it doesn't
+    distinguish product families or model numbers. Asking the LLM to read
+    all FAQ questions at once and return the matching entry id is slower
+    (~1-2s with Haiku) but correct. Embeddings are kept on disk for the
+    admin UI / future analytics; they are no longer used for matching.
+    """
+
+    def __init__(self, embedder, cli_path: str = "claude", llm_model: str = ""):
         self.embedder = embedder
+        self.cli_path = cli_path
+        self.llm_model = llm_model
         self._entries: list[FaqEntry] = []
-        self._matrix: Optional[np.ndarray] = None  # shape (N, dim)
+        self._matrix: Optional[np.ndarray] = None  # shape (N, dim) — kept for analytics
         self._last_loaded: float = 0.0
         self._reload()
 
     # ──────────────────────────── public
 
     def find(self, query: str) -> Optional[FaqMatch]:
-        """Return best FAQ match or None if nothing is above threshold."""
+        """Return best FAQ match (LLM-decided) or None."""
         self._maybe_reload()
-        if self._matrix is None or len(self._entries) == 0:
+        if not self._entries:
+            return None
+        return self._find_via_llm(query)
+
+    def reload(self) -> None:
+        """Force an immediate reload from DB (call after admin creates/updates entries)."""
+        self._reload()
+
+    # ──────────────────────────── LLM matching
+
+    def _find_via_llm(self, query: str) -> Optional[FaqMatch]:
+        """Single LLM call: pick which FAQ entry (if any) answers `query`."""
+        from src.core.claude_token import ensure_fresh_token_sync
+        ensure_fresh_token_sync()
+
+        faq_list = "\n".join(
+            f"{i + 1}. {e.question.strip()}" for i, e in enumerate(self._entries)
+        )
+        prompt = _LLM_PROMPT.format(faq_list=faq_list, query=query.strip())
+
+        env = os.environ.copy()
+        env.pop("CLAUDECODE", None)
+        env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+        args = [
+            self.cli_path, "--print", "--output-format", "text",
+            "--no-session-persistence",
+            "--disallowed-tools", _DISALLOWED_TOOLS,
+        ]
+        if self.llm_model:
+            args += ["--model", self.llm_model]
+
+        try:
+            result = subprocess.run(
+                args,
+                input=prompt.encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                cwd="/tmp",
+                timeout=LLM_TIMEOUT,
+            )
+            text = result.stdout.decode().strip().strip('"\'').strip()
+        except Exception as exc:
+            logger.warning("FAQ LLM match failed (%s) — falling through to RAG", exc)
             return None
 
-        q_vec = self.embedder.embed_queries([query])[0]  # (dim,)
-        scores = self._matrix @ q_vec                    # cosine, already normalized
+        # Parse: either "NONE" or "<index>"
+        if text.upper().startswith("NONE"):
+            logger.debug("FAQ LLM: no match for %r", query[:60])
+            return None
 
-        best_idx = int(np.argmax(scores))
-        best_score = float(scores[best_idx])
+        # Pull leading integer (model may add trailing punctuation)
+        digits = ""
+        for ch in text:
+            if ch.isdigit():
+                digits += ch
+            elif digits:
+                break
+        if not digits:
+            logger.warning("FAQ LLM returned unparseable %r for %r", text[:50], query[:60])
+            return None
 
-        if best_score >= THRESHOLD:
-            entry = self._entries[best_idx]
-            # Cosine-only match isn't enough — E5 happily matches "Расскажи о X"
-            # to "Расскажи о Y" above threshold. Reject if product family or
-            # model number disagree between query and FAQ question.
-            if not _product_tokens_compatible(query, entry.question):
-                logger.debug(
-                    "FAQ rejected (token mismatch): score=%.3f q=%r vs faq=%r",
-                    best_score, query[:60], entry.question[:60],
-                )
-                return None
-            logger.debug("FAQ hit: score=%.3f id=%d q=%r", best_score, entry.id, entry.question[:60])
-            return FaqMatch(
-                entry_id=entry.id,
-                question=entry.question,
-                answer=entry.answer,
-                score=best_score,
-            )
-        return None
+        idx = int(digits) - 1
+        if not (0 <= idx < len(self._entries)):
+            logger.warning("FAQ LLM returned out-of-range index %d for %r", idx + 1, query[:60])
+            return None
+
+        entry = self._entries[idx]
+        logger.debug("FAQ LLM hit: idx=%d id=%d q=%r", idx + 1, entry.id, entry.question[:60])
+        return FaqMatch(
+            entry_id=entry.id,
+            question=entry.question,
+            answer=entry.answer,
+            score=1.0,  # LLM-decided binary match
+        )
 
     def reload(self) -> None:
         """Force an immediate reload from DB (call after admin creates/updates entries)."""
