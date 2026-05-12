@@ -234,6 +234,10 @@ function formatTs(ts) {
               <div class="detail-label">Ответ</div>
               <div class="detail-text detail-a">{{ selected.answer }}</div>
             </div>
+            <div v-if="selected.feedback_note" class="detail-section">
+              <div class="detail-label">👎 Что не так (от пользователя)</div>
+              <div class="detail-text detail-note">{{ selected.feedback_note }}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -590,6 +594,14 @@ function formatTs(ts) {
 .detail-ref {
   color: var(--fg-2);
   font-style: italic;
+}
+
+.detail-note {
+  background: color-mix(in srgb, var(--ark-red-600) 8%, transparent);
+  border-left: 3px solid var(--ark-red-600);
+  padding: var(--sp-3);
+  border-radius: var(--rad-sm);
+  color: var(--fg-1);
 }
 
 /* Pagination */

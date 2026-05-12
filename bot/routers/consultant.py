@@ -8,12 +8,19 @@ from datetime import datetime
 from pathlib import Path
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
+
+
+class BadFeedback(StatesGroup):
+    waiting_for_note = State()  # user pressed 👎, we're waiting for the explanation
 
 from src.core.config import settings
 from src.core.database import SessionLocal
@@ -148,7 +155,7 @@ def _get_log_entry(bot_msg_id: int) -> dict:
     return {}
 
 
-def _set_feedback_in_log(log_id: int | None, feedback: str) -> None:
+def _set_feedback_in_log(log_id: int | None, feedback: str, note: str | None = None) -> None:
     if log_id is None:
         return
     try:
@@ -156,6 +163,8 @@ def _set_feedback_in_log(log_id: int | None, feedback: str) -> None:
             row = s.get(QueryLog, log_id)
             if row:
                 row.feedback = feedback
+                if note is not None:
+                    row.feedback_note = note
                 s.commit()
     except Exception as e:
         logger.warning("Feedback update failed: %s", e)
@@ -175,7 +184,7 @@ def _call_generator(query: str) -> tuple[str, AnswerMeta]:
         return _generator.answer_with_meta(session, query)
 
 
-@router.message(F.text)
+@router.message(StateFilter(None), F.text)
 async def handle_question(message: Message) -> None:
     if _generator is None:
         await message.answer("⏳ Бот ещё загружается, попробуйте через несколько секунд.")
@@ -255,7 +264,7 @@ async def handle_good(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("fb:bad:"))
-async def handle_bad(callback: CallbackQuery) -> None:
+async def handle_bad(callback: CallbackQuery, state: FSMContext) -> None:
     bot_msg_id = int(callback.data.split(":")[-1])
     entry = _get_log_entry(bot_msg_id)
     _set_feedback_in_log(entry.get("log_id"), "bad")
@@ -268,8 +277,43 @@ async def handle_bad(callback: CallbackQuery) -> None:
         "meta": entry.get("meta", {}),
     })
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer("👎 Спасибо! Учтём и постараемся улучшиться.", show_alert=False)
+    await callback.answer()
     logger.info("Feedback BAD user=%s q=%r", callback.from_user.id, entry.get("question", "")[:60])
+
+    # Enter FSM: wait for the user to type why the answer was bad.
+    await state.set_state(BadFeedback.waiting_for_note)
+    await state.update_data(log_id=entry.get("log_id"), question=entry.get("question", ""))
+    await callback.message.answer(
+        "👎 Спасибо за оценку! Подскажите, пожалуйста:\n"
+        "• <b>Что не так</b> с ответом?\n"
+        "• <b>Что нужно было ответить</b> по вашему мнению?\n\n"
+        "Можно одним сообщением. Или напишите /skip — пропустить.",
+    )
+
+
+@router.message(BadFeedback.waiting_for_note, F.text == "/skip")
+async def handle_bad_skip(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Ок, пропустили. Спасибо за оценку!")
+
+
+@router.message(BadFeedback.waiting_for_note, F.text)
+async def handle_bad_note(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    log_id = data.get("log_id")
+    note = (message.text or "").strip()[:4000]
+    _set_feedback_in_log(log_id, "bad", note=note)
+    _log_feedback({
+        "ts": datetime.now().isoformat(),
+        "type": "bad_note",
+        "user_id": message.from_user.id,
+        "log_id": log_id,
+        "question": data.get("question", ""),
+        "note": note,
+    })
+    await state.clear()
+    await message.answer("Спасибо! Передал команде — постараемся улучшить.")
+    logger.info("Feedback NOTE user=%s log=%s note=%r", message.from_user.id, log_id, note[:80])
 
 
 @router.callback_query(F.data.startswith("fb:operator:"))

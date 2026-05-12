@@ -18,6 +18,7 @@ class QueryLogItem(BaseModel):
     city: Optional[str] = None
     reformulated_query: Optional[str] = None
     feedback: Optional[str] = None
+    feedback_note: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
