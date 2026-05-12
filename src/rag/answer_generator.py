@@ -362,20 +362,19 @@ class AnswerGenerator:
         t0 = time.monotonic()
 
         # Fast path: check hand-curated FAQ first (no LLM call)
-        # Classify FIRST so we can skip the semantic FAQ matcher on product
-        # queries. E5 embeddings match question structure aggressively — a
-        # hand-curated entry "Расскажи о Русь-12 Л" cosine-matches "Расскажи о
-        # Былина-12 Ч Панорама" above the 0.92 threshold, and the bot would
-        # return the wrong product's specs. RAG is the right path here.
-        qtype = classify(query)
-        logger.debug(f"[{self.mode}] {qtype.value} | {query[:60]}")
-
-        if qtype != QueryType.RAG_PRODUCT and self.faq_matcher:
+        # FaqMatcher now validates product-token overlap internally, so it's
+        # safe to run on every query (incl. product ones). E5 cosine alone
+        # would match "Расскажи о Русь" to "Расскажи о Былина" — token check
+        # filters those out before the wrong answer is returned.
+        if self.faq_matcher:
             match = self.faq_matcher.find(query)
             if match:
                 meta = AnswerMeta(query_type="FAQ_EXACT", top_score=match.score)
                 meta.latency_ms = int((time.monotonic() - t0) * 1000)
                 return match.answer, meta
+
+        qtype = classify(query)
+        logger.debug(f"[{self.mode}] {qtype.value} | {query[:60]}")
 
         if qtype == QueryType.FAQ_DEALER:
             answer, meta = self._handle_dealer_meta(query)
