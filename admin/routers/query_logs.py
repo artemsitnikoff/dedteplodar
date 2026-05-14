@@ -32,7 +32,7 @@ async def list_query_logs(
     elif feedback:
         q = q.where(QueryLog.feedback == feedback)
     if search:
-        q = q.where(QueryLog.question.contains(search))
+        q = q.where(func.lower(QueryLog.question).contains(search.lower()))
 
     total = db.execute(select(func.count()).select_from(q.subquery())).scalar()
 

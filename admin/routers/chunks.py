@@ -38,8 +38,10 @@ async def list_chunks(
         query = query.where(Chunk.index_version == index_version)
 
     if search:
+        s = search.lower()
         query = query.where(
-            Chunk.chunk_text.contains(search) | Chunk.contextualized_text.contains(search)
+            func.lower(Chunk.chunk_text).contains(s)
+            | func.lower(Chunk.contextualized_text).contains(s)
         )
 
     # Count total

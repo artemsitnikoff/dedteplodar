@@ -32,7 +32,9 @@ async def list_products(
         query = query.where(Product.category_id == category_id)
 
     if search:
-        query = query.where(Product.name.contains(search))
+        # SQLite LIKE is case-insensitive only for ASCII — for Cyrillic
+        # we need explicit lower() on both sides.
+        query = query.where(func.lower(Product.name).contains(search.lower()))
 
     # Count total
     count_query = select(func.count()).select_from(query.subquery())

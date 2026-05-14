@@ -33,8 +33,10 @@ async def list_documents(
         query = query.where(Document.doc_type == doc_type)
 
     if search:
+        s = search.lower()
         query = query.where(
-            Document.title.contains(search) | Document.source_url.contains(search)
+            func.lower(Document.title).contains(s)
+            | func.lower(Document.source_url).contains(s)
         )
 
     # Count total

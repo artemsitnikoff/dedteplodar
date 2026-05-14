@@ -32,6 +32,13 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
+        # Override SQLite's built-in lower() with Python's str.lower so
+        # case-insensitive search works for Cyrillic too (the C-level lower()
+        # in SQLite only folds ASCII — "КомПАР" stays "КомПАР", and an
+        # admin search for "компар" finds nothing). Same for upper().
+        dbapi_connection.create_function("lower", 1, lambda s: s.lower() if isinstance(s, str) else s)
+        dbapi_connection.create_function("upper", 1, lambda s: s.upper() if isinstance(s, str) else s)
+
 
 # Create engine with connection pooling and threading support
 engine = create_engine(
