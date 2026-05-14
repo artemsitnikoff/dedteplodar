@@ -140,6 +140,16 @@ def extract_intent(
     faq_list = "\n".join(
         f"{i + 1}. {e.question.strip()}" for i, e in enumerate(faq_entries)
     ) or "(нет записей)"
+
+    # Log what the intent extractor actually sees — to debug "I created
+    # a FAQ entry but the bot doesn't match it" issues.
+    logger.info(
+        "[intent] query=%r | faq_entries=%d | first_faq=%r",
+        query[:80],
+        len(faq_entries),
+        (faq_entries[0].question[:80] if faq_entries else "(empty)"),
+    )
+
     prompt = _PROMPT.format(
         faq_list=faq_list,
         history_block=_format_history(history),
@@ -171,6 +181,10 @@ def extract_intent(
     except Exception as exc:
         logger.warning("intent extractor subprocess failed: %s", exc)
         return None
+
+    # Always log the raw LLM response so we can see WHY a FAQ match was
+    # skipped (was the JSON wrong? did the LLM pick null on purpose?).
+    logger.info("[intent] LLM raw response: %s", text[:500])
 
     if result.returncode != 0 or not text:
         logger.warning("intent extractor returned no output (code=%s)", result.returncode)
@@ -211,9 +225,10 @@ def extract_intent(
         is_listing=bool(data.get("is_listing")),
         comparison_targets=comparison_targets,
     )
-    logger.debug(
-        "intent: %s faq=%s city=%s link=%s listing=%s product=%r",
+    logger.info(
+        "[intent] parsed: intent=%s faq_match_id=%s city=%s wants_link=%s listing=%s product=%r reformulated=%r",
         intent.intent, intent.faq_match_id, intent.city,
         intent.wants_link, intent.is_listing, intent.product_mention,
+        (intent.reformulated_query or "")[:80],
     )
     return intent

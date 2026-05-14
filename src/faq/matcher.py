@@ -24,7 +24,8 @@ from src.faq.models import FaqEntry
 logger = logging.getLogger(__name__)
 
 THRESHOLD = 0.92          # minimum cosine similarity (legacy fast-path, unused by default)
-RELOAD_INTERVAL = 60.0    # seconds between DB reloads
+RELOAD_INTERVAL = 10.0    # seconds between DB reloads — new admin FAQ entries
+                          # show up to bot users within this window
 LLM_TIMEOUT = 20          # seconds — LLM matcher subprocess timeout
 
 _LLM_PROMPT = """Ты — классификатор вопросов. Дан список FAQ-записей и вопрос пользователя.
@@ -194,9 +195,18 @@ class FaqMatcher:
         else:
             self._matrix = None
 
+        prev_count = len(self._entries)
         self._entries = valid
         self._last_loaded = time.monotonic()
-        logger.info("FaqMatcher loaded %d active entries", len(valid))
+        if len(valid) != prev_count or prev_count == 0:
+            logger.info(
+                "FaqMatcher loaded %d active entries (was %d). Entries: %s",
+                len(valid), prev_count,
+                ", ".join(f"#{i+1}:{e.question[:50]!r}" for i, e in enumerate(valid[:20]))
+                or "(empty)",
+            )
+        else:
+            logger.info("FaqMatcher reloaded — same %d entries", len(valid))
 
     # ──────────────────────────── embedding helpers (used by admin API on create/update)
 
