@@ -70,6 +70,7 @@ glaf/
 # Mango call transcripts + analysis output (private call data)
 mango/
 mango_analysis/
+*.zip
 
 # Local egg-info
 teplodarbot.egg-info/
