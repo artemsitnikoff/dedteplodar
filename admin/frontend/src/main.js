@@ -30,6 +30,7 @@ const routes = [
   { path: '/journal', name: 'journal', component: JournalView },
   { path: '/faq-entries', name: 'faq-entries', component: FaqEntriesView },
   { path: '/eval', name: 'eval', component: () => import('@/views/EvalView.vue') },
+  { path: '/synonyms', name: 'synonyms', component: () => import('@/views/SynonymsView.vue') },
 ]
 
 const router = createRouter({

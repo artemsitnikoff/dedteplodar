@@ -91,6 +91,13 @@ export const api = {
   getJournal: (params = {}) => client.get('/journal', { params }),
   getJournalContext: (id) => client.get(`/journal/${id}/context`),
 
+  // Synonyms (fuzzy-match dictionary)
+  getSynonyms: (params = {}) => client.get('/synonyms', { params }),
+  createSynonym: (payload) => client.post('/synonyms', payload),
+  updateSynonym: (id, payload) => client.put(`/synonyms/${id}`, payload),
+  deleteSynonym: (id) => client.delete(`/synonyms/${id}`),
+  reloadSynonyms: () => client.post('/synonyms/reload'),
+
   // FAQ Entries
   getFaqEntries: (params = {}) => client.get('/faq-entries', { params }),
   createFaqEntry: (data) => client.post('/faq-entries', data),

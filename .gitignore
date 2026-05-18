@@ -67,6 +67,10 @@ Thumbs.db
 # Unrelated nested project
 glaf/
 
+# Mango call transcripts + analysis output (private call data)
+mango/
+mango_analysis/
+
 # Local egg-info
 teplodarbot.egg-info/
 

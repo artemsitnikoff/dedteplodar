@@ -25,7 +25,7 @@ function navigate(routeName) {
       </div>
       <div class="brand-name">
         ДедТеплодар
-        <span class="brand-version">v1.1</span>
+        <span class="brand-version">v1.2</span>
       </div>
     </div>
 
@@ -142,6 +142,15 @@ function navigate(routeName) {
       >
         <span class="nav-icon">🧪</span>
         <span class="nav-label">Eval</span>
+      </button>
+
+      <!-- Synonyms -->
+      <button
+        :class="['nav-item', { active: isActive('synonyms') }]"
+        @click="navigate('synonyms')"
+      >
+        <span class="nav-icon">🔁</span>
+        <span class="nav-label">Синонимы</span>
       </button>
     </nav>
   </aside>

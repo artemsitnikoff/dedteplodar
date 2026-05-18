@@ -56,7 +56,7 @@ def _feedback_kb(bot_msg_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-BOT_VERSION = "1.1"
+BOT_VERSION = "1.2"
 
 
 def _debug_footer(meta: AnswerMeta) -> str:
@@ -193,6 +193,16 @@ async def handle_question(message: Message) -> None:
     query = message.text.strip()
     if not query:
         return
+
+    # Substitute admin-managed synonyms before anything else — fuzzy terms
+    # like "трус двенадцать" → "Русь-12" or "билетная горелка" → "пеллетная
+    # горелка" become canonical before the intent extractor sees them, so
+    # retrieval and FAQ matching work as intended.
+    from src.synonyms.store import get_synonym_store
+    canonical_query = get_synonym_store().apply(query)
+    if canonical_query != query:
+        logger.info("Synonyms applied: %r → %r", query, canonical_query)
+        query = canonical_query
 
     stop_event = asyncio.Event()
     typing_task = asyncio.create_task(_typing_loop(message.bot, message.chat.id, stop_event))

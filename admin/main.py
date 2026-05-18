@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router
+from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router, synonyms as synonyms_router
 
 # ── HTTP Basic auth on every request (except static assets and health) ───────────────────
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
@@ -94,6 +94,7 @@ app.include_router(pipeline.router, prefix="/api/v1")
 app.include_router(query_logs.router, prefix="/api/v1")
 app.include_router(faq_entries.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
+app.include_router(synonyms_router.router, prefix="/api/v1")
 
 
 @app.get("/health")
