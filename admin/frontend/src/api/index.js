@@ -111,7 +111,7 @@ export const api = {
   updateFaqDealers: (content) => client.put('/faq/dealers', { content }),
 
   // Eval
-  getEvalDataset: () => client.get('/eval/dataset'),
+  getEvalDataset: (name = 'synthetic') => client.get('/eval/dataset', { params: { name } }),
   runEvalDataset: (note = null, dataset = 'synthetic') => {
     const params = { dataset }
     if (note) params.note = note

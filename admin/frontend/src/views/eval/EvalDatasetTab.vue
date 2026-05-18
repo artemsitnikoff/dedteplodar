@@ -8,11 +8,17 @@ const toast = inject('toast')
 
 const dataset = ref([])
 const datasetLoading = ref(false)
+const selectedDataset = ref('synthetic')
+
+const DATASETS = [
+  { value: 'synthetic', label: 'Synthetic (50)', hint: '50 синтетических вопросов, ручная составка' },
+  { value: 'mango',     label: 'Mango (50)',     hint: '50 реальных вопросов из транскрибаций звонков ТП' },
+]
 
 async function loadDataset() {
   datasetLoading.value = true
   try {
-    const res = await api.getEvalDataset()
+    const res = await api.getEvalDataset(selectedDataset.value)
     dataset.value = res.data.items
   } catch {
     toast('Ошибка загрузки датасета', 'error')
@@ -28,6 +34,17 @@ defineExpose({ dataset })
 
 <template>
   <div class="eval-dataset-tab">
+    <div class="dataset-toolbar">
+      <select v-model="selectedDataset" class="dataset-select" @change="loadDataset">
+        <option v-for="d in DATASETS" :key="d.value" :value="d.value">
+          {{ d.label }}
+        </option>
+      </select>
+      <div class="dataset-hint">
+        {{ DATASETS.find(d => d.value === selectedDataset)?.hint }}
+      </div>
+    </div>
+
     <div class="table-wrap">
       <div v-if="datasetLoading" class="loading-state">
         <AjaxFrog />
@@ -69,7 +86,30 @@ defineExpose({ dataset })
 </template>
 
 <style scoped>
-/* Styles will be inherited from parent component */
+.dataset-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.dataset-select {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-1);
+  border-radius: var(--rad-md);
+  background: var(--bg-input);
+  color: var(--fg-1);
+  font-size: var(--fs-14);
+  cursor: pointer;
+  min-width: 180px;
+}
+
+.dataset-hint {
+  font-size: var(--fs-12);
+  color: var(--fg-3);
+}
+
 .loading-state {
   padding: var(--sp-8);
   text-align: center;
