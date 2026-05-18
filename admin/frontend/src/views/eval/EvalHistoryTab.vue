@@ -147,6 +147,9 @@ defineExpose({ loadRuns, runs })
             <div class="run-card-meta">
               <span class="run-id">#{{ run.id }}</span>
               <span :class="['run-status', statusCls(run.status)]">{{ statusLabel(run.status) }}</span>
+              <span v-if="run.dataset_name" class="run-dataset" :title="'Eval dataset'">
+                {{ run.dataset_name }}
+              </span>
               <span class="run-date">{{ formatDate(run.ran_at) }}</span>
               <span class="run-progress">{{ run.completed }}/{{ run.total }}</span>
               <span v-if="run.note" class="run-note">{{ run.note }}</span>
@@ -308,6 +311,17 @@ defineExpose({ loadRuns, runs })
 .run-progress {
   font-size: var(--fs-12);
   color: var(--fg-3);
+}
+
+.run-dataset {
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: var(--rad-sm);
+  background: color-mix(in srgb, var(--ark-blue-600) 15%, transparent);
+  color: var(--ark-blue-600);
 }
 
 .run-note {

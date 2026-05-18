@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, defer
 
 from admin.dependencies import get_db
-from admin.eval_preset import EVAL_DATASET
+from admin.eval_preset import EVAL_DATASET, EVAL_DATASETS, get_dataset
 from admin.schemas.eval import (
     AnswerResponse,
     CompareResponse,
@@ -46,33 +46,46 @@ router = APIRouter(prefix="/eval", tags=["Eval"])
 # ─────────────────────────────────────────────── endpoints
 
 @router.get("/dataset", response_model=DatasetResponse)
-async def get_dataset():
-    """Return the full list of 50 preset questions (no DB access)."""
-    return {"items": EVAL_DATASET, "total": len(EVAL_DATASET)}
+async def get_dataset_endpoint(name: str = "synthetic"):
+    """Return the preset questions. `name=synthetic|mango`."""
+    items = get_dataset(name)
+    return {"items": items, "total": len(items)}
 
 
 @router.post("/run", status_code=202, response_model=RunStartResponse)
 async def start_run(
     background_tasks: BackgroundTasks,
     note: str | None = None,
+    dataset: str = "synthetic",
     db: Session = Depends(get_db),
 ):
-    """Create a new eval run and schedule it as a background task."""
+    """Create a new eval run and schedule it as a background task.
+
+    `dataset` selects which preset to run: "synthetic" (default — 50 hand-
+    written questions) or "mango" (50 real questions extracted from
+    April-May 2026 Mango call transcripts).
+    """
+    if dataset not in EVAL_DATASETS:
+        raise HTTPException(status_code=400, detail=f"Unknown dataset {dataset!r}. "
+                                                    f"Choose from: {list(EVAL_DATASETS)}")
+    items = get_dataset(dataset)
+
     # Ensure the generator is ready before handing off to background
     await get_eval_generator()
 
     run = EvalRun(
-        total=len(EVAL_DATASET),
+        total=len(items),
         completed=0,
         status="running",
         note=note,
+        dataset_name=dataset,
     )
     db.add(run)
     db.commit()
     db.refresh(run)
 
     run_id = run.id
-    background_tasks.add_task(run_eval_background, run_id)
+    background_tasks.add_task(run_eval_background, run_id, dataset)
 
     return {"run_id": run_id}
 

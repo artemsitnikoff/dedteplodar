@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func, inspect, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.database import Base, engine
@@ -21,6 +21,7 @@ class EvalRun(Base):
     completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dataset_name: Mapped[str] = mapped_column(String(32), nullable=False, default="synthetic")
 
     results: Mapped[list["EvalResult"]] = relationship(
         "EvalResult", back_populates="run", cascade="all, delete-orphan"
@@ -52,3 +53,24 @@ class EvalResult(Base):
 
 # Create tables if they don't exist yet (safe to call multiple times)
 Base.metadata.create_all(bind=engine, checkfirst=True)
+
+
+# Idempotent migration: add dataset_name column to legacy eval_runs tables.
+def _ensure_dataset_name_column() -> None:
+    try:
+        insp = inspect(engine)
+        if "eval_runs" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("eval_runs")}
+        if "dataset_name" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE eval_runs ADD COLUMN dataset_name VARCHAR(32) "
+                    "NOT NULL DEFAULT 'synthetic'"
+                ))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("dataset_name migration failed")
+
+
+_ensure_dataset_name_column()

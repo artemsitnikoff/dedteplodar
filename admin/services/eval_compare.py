@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from admin.eval_preset import EVAL_DATASET
+from admin.eval_preset import get_dataset
 from admin.services.eval_service import compute_aggregates_batch, serialise_run
 from src.eval.models import EvalResult, EvalRun
 
@@ -42,7 +42,12 @@ def compute_compare(db: Session, run_a: EvalRun, run_b: EvalRun) -> dict[str, An
     unchanged = 0
     type_changes = 0
 
-    for item in EVAL_DATASET:
+    # Use the dataset of run_a — if both runs share the same dataset (normal
+    # case) this gives the right question metadata. Comparing across datasets
+    # still works at the score-aggregate level but per-question rows will
+    # naturally be sparse.
+    dataset_items = get_dataset(getattr(run_a, "dataset_name", "synthetic"))
+    for item in dataset_items:
         qid = item["id"]
         ra = results_a.get(qid)
         rb = results_b.get(qid)

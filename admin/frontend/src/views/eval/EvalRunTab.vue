@@ -10,10 +10,16 @@ const toast = inject('toast')
 
 // ── run tab ───────────────────────────────────────────────────────────────────
 const runNote = ref('')
+const runDataset = ref('synthetic')  // "synthetic" | "mango"
 const isRunning = ref(false)
 const currentRun = ref(null)
 const pollTimer = ref(null)
 const expandedAnswerIds = ref(new Set())
+
+const DATASETS = [
+  { value: 'synthetic', label: 'Synthetic (50)', hint: '50 синтетических вопросов, ручная составка' },
+  { value: 'mango',     label: 'Mango (50)',     hint: '50 реальных вопросов из транскрибаций звонков ТП' },
+]
 
 const emit = defineEmits(['run-completed'])
 
@@ -24,7 +30,7 @@ async function startRun() {
   expandedAnswerIds.value = new Set()
 
   try {
-    const res = await api.runEvalDataset(runNote.value || null)
+    const res = await api.runEvalDataset(runNote.value || null, runDataset.value)
     const runId = res.data.run_id
     await pollRun(runId)
     schedulePolling(runId)
@@ -122,6 +128,16 @@ async function loadAnswer(runId, questionId) {
     <!-- Start controls -->
     <div class="run-controls panel">
       <div class="run-controls-inner">
+        <select
+          v-model="runDataset"
+          class="dataset-select"
+          :disabled="isRunning"
+          :title="DATASETS.find(d => d.value === runDataset)?.hint"
+        >
+          <option v-for="d in DATASETS" :key="d.value" :value="d.value">
+            {{ d.label }}
+          </option>
+        </select>
         <input
           v-model="runNote"
           placeholder="Заметка к прогону (опционально)"
@@ -137,6 +153,9 @@ async function loadAnswer(runId, questionId) {
           <AjaxFrog v-if="isRunning" text="" size="16px" />
           <span v-else>Запустить eval</span>
         </button>
+      </div>
+      <div class="dataset-hint">
+        {{ DATASETS.find(d => d.value === runDataset)?.hint }}
       </div>
     </div>
 
@@ -214,6 +233,23 @@ async function loadAnswer(runId, questionId) {
   display: flex;
   gap: var(--sp-3);
   align-items: center;
+}
+
+.dataset-select {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-1);
+  border-radius: var(--rad-md);
+  background: var(--bg-input);
+  color: var(--fg-1);
+  font-size: var(--fs-14);
+  cursor: pointer;
+  min-width: 160px;
+}
+
+.dataset-hint {
+  font-size: var(--fs-11);
+  color: var(--fg-3);
+  padding: var(--sp-2) 0 0;
 }
 
 .run-note-input {

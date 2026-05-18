@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import case, func as sql_func, select
 from sqlalchemy.orm import Session
 
-from admin.eval_preset import EVAL_DATASET
+from admin.eval_preset import EVAL_DATASET, get_dataset
 from src.core.database import SessionLocal
 from src.eval.models import EvalResult, EvalRun
 
@@ -274,8 +274,8 @@ def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> di
     return {"id": item["id"], "latency_ms": latency_ms, "error": error}
 
 
-def run_eval_background(run_id: int) -> None:
-    """Execute the full eval dataset with parallel workers; called via BackgroundTasks."""
+def run_eval_background(run_id: int, dataset_name: str = "synthetic") -> None:
+    """Execute the chosen eval dataset with parallel workers; called via BackgroundTasks."""
     global _generator
     if _generator is None:
         logger.error(
@@ -287,13 +287,16 @@ def run_eval_background(run_id: int) -> None:
         return
     generator = _generator
 
+    items = get_dataset(dataset_name)
+    logger.info("[eval] run=%s starting on dataset=%s (%d items)", run_id, dataset_name, len(items))
+
     db_lock = threading.Lock()
 
     try:
         with ThreadPoolExecutor(max_workers=_EVAL_WORKERS) as pool:
             futures = {
                 pool.submit(_eval_one, item, run_id, generator, db_lock): item
-                for item in EVAL_DATASET
+                for item in items
             }
             for fut in as_completed(futures):
                 try:

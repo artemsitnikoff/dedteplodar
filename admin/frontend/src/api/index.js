@@ -112,7 +112,11 @@ export const api = {
 
   // Eval
   getEvalDataset: () => client.get('/eval/dataset'),
-  runEvalDataset: (note = null) => client.post('/eval/run', null, { params: note ? { note } : {} }),
+  runEvalDataset: (note = null, dataset = 'synthetic') => {
+    const params = { dataset }
+    if (note) params.note = note
+    return client.post('/eval/run', null, { params })
+  },
   getEvalRuns: () => client.get('/eval/runs'),
   getEvalRun: (id) => client.get(`/eval/runs/${id}`),
   getEvalRunProgress: (id) => client.get(`/eval/runs/${id}/progress`),

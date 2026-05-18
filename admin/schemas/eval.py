@@ -31,6 +31,7 @@ class RunSummary(BaseModel):
     total: int
     completed: int
     note: Optional[str] = None
+    dataset_name: Optional[str] = "synthetic"
 
     # Aggregates (only filled when status reaches completion or partial)
     avg_score: Optional[float] = None
