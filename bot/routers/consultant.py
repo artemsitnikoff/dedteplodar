@@ -155,6 +155,37 @@ def _get_log_entry(bot_msg_id: int) -> dict:
     return {}
 
 
+async def _judge_in_background(log_id: int, question: str, answer: str) -> None:
+    """Run the LLM-as-judge after the user already got the response.
+
+    Writes usefulness_score / usefulness_verdict back to the QueryLog row
+    so the admin Journal shows quality per-message. Failures are swallowed
+    — the user already has their answer; missing score is acceptable.
+    """
+    try:
+        from src.eval.judge import judge_answer
+        # Off the event loop — subprocess call to Claude CLI is blocking
+        verdict = await asyncio.to_thread(
+            judge_answer, question, answer,
+            settings.claude_cli_path,
+            settings.claude_reformulation_model,  # Haiku
+        )
+        if not verdict:
+            return
+        with SessionLocal() as s:
+            row = s.get(QueryLog, log_id)
+            if row:
+                row.usefulness_score = verdict["score"]
+                row.usefulness_verdict = verdict["verdict"]
+                s.commit()
+        logger.info(
+            "Judge log=%s score=%d (%s)",
+            log_id, verdict["score"], verdict["verdict"][:80],
+        )
+    except Exception as e:
+        logger.warning("Background judge failed for log=%s: %s", log_id, e)
+
+
 def _set_feedback_in_log(log_id: int | None, feedback: str, note: str | None = None) -> None:
     if log_id is None:
         return
@@ -238,6 +269,11 @@ async def handle_question(message: Message) -> None:
         meta=meta,
         bot_message_id=bot_msg.message_id,
     )
+
+    # Fire-and-forget LLM judge — user already received the answer, this
+    # adds a usefulness score to the journal row in the background.
+    if log_id and answer and meta.query_type != "ERROR":
+        asyncio.create_task(_judge_in_background(log_id, query, answer))
 
     _msg_store[bot_msg.message_id] = {
         "user_id": message.from_user.id,

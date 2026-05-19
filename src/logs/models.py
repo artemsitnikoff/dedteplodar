@@ -27,24 +27,31 @@ class QueryLog(Base):
     feedback: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # good | bad | operator
     feedback_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # free-text reason on 👎: "что не так + что ожидали"
     bot_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # LLM-as-judge usefulness score (0-100), filled asynchronously after the
+    # user already got the answer. NULL = not judged yet (or judge failed).
+    usefulness_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    usefulness_verdict: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
-# ── Idempotent migration: add feedback_note to legacy DBs ──────────────
-# SQLAlchemy create_all() never alters existing tables. Run a one-shot
-# ALTER on import so existing prod DBs pick up the new column.
-def _ensure_feedback_note_column() -> None:
+# ── Idempotent migrations for legacy DBs ──────────────
+# SQLAlchemy create_all() never alters existing tables. Run one-shot
+# ALTERs on import so existing prod DBs pick up new columns.
+def _ensure_migrations() -> None:
     try:
         insp = inspect(engine)
         if "query_logs" not in insp.get_table_names():
-            return  # create_all() will build it fresh with the column
+            return
         cols = {c["name"] for c in insp.get_columns("query_logs")}
-        if "feedback_note" not in cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "feedback_note" not in cols:
                 conn.execute(text("ALTER TABLE query_logs ADD COLUMN feedback_note TEXT"))
+            if "usefulness_score" not in cols:
+                conn.execute(text("ALTER TABLE query_logs ADD COLUMN usefulness_score INTEGER"))
+            if "usefulness_verdict" not in cols:
+                conn.execute(text("ALTER TABLE query_logs ADD COLUMN usefulness_verdict TEXT"))
     except Exception:
-        # Best-effort — don't crash the bot if migration fails on import
         import logging
-        logging.getLogger(__name__).exception("feedback_note migration failed")
+        logging.getLogger(__name__).exception("query_logs migrations failed")
 
 
-_ensure_feedback_note_column()
+_ensure_migrations()

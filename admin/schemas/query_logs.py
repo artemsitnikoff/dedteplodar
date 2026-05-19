@@ -19,6 +19,8 @@ class QueryLogItem(BaseModel):
     reformulated_query: Optional[str] = None
     feedback: Optional[str] = None
     feedback_note: Optional[str] = None
+    usefulness_score: Optional[int] = None
+    usefulness_verdict: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

@@ -104,6 +104,13 @@ function scoreColor(score) {
   return 'score-red'
 }
 
+function usefulnessColor(s) {
+  if (s == null) return ''
+  if (s >= 75) return 'score-green'
+  if (s >= 50) return 'score-yellow'
+  return 'score-red'
+}
+
 function feedbackLabel(fb) {
   if (fb === 'good') return { label: '👍', cls: 'fb-good' }
   if (fb === 'bad') return { label: '👎', cls: 'fb-bad' }
@@ -169,6 +176,7 @@ function formatTs(ts) {
           <col style="width: 260px" />
           <col style="width: auto" />
           <col style="width: 64px" />
+          <col style="width: 56px" />
           <col style="width: 44px" />
           <col style="width: 36px" />
           <col style="width: 52px" />
@@ -181,6 +189,7 @@ function formatTs(ts) {
             <th>Вопрос</th>
             <th>Ответ</th>
             <th>Score</th>
+            <th title="LLM-judge usefulness 0–100">Useful</th>
             <th>Чанки</th>
             <th>Оц.</th>
             <th></th>
@@ -205,6 +214,14 @@ function formatTs(ts) {
               </span>
               <span v-else class="score-none">—</span>
             </td>
+            <td class="cell-score">
+              <span v-if="log.usefulness_score !== null && log.usefulness_score !== undefined"
+                    :class="['usefulness-pill', usefulnessColor(log.usefulness_score)]"
+                    :title="log.usefulness_verdict || ''">
+                {{ log.usefulness_score }}
+              </span>
+              <span v-else class="score-none" title="LLM-judge ещё не отработал">…</span>
+            </td>
             <td class="cell-num">{{ log.chunks_used ?? '—' }}</td>
             <td class="cell-fb">
               <span v-if="feedbackLabel(log.feedback)" :class="['fb-icon', feedbackLabel(log.feedback).cls]">
@@ -216,7 +233,7 @@ function formatTs(ts) {
             </td>
           </tr>
           <tr v-if="logs.length === 0">
-            <td colspan="9" class="empty-state">Нет записей</td>
+            <td colspan="10" class="empty-state">Нет записей</td>
           </tr>
         </tbody>
       </table>
@@ -280,6 +297,10 @@ function formatTs(ts) {
             <div class="detail-section">
               <div class="detail-label">Ответ</div>
               <div class="detail-text detail-a">{{ selected.answer }}</div>
+            </div>
+            <div v-if="selected.usefulness_verdict" class="detail-section">
+              <div class="detail-label">⚖️ Оценка LLM-судьи: {{ selected.usefulness_score }}/100</div>
+              <div class="detail-text detail-verdict">{{ selected.usefulness_verdict }}</div>
             </div>
             <div v-if="selected.feedback_note" class="detail-section">
               <div class="detail-label">👎 Что не так (от пользователя)</div>
@@ -650,6 +671,28 @@ function formatTs(ts) {
   border-radius: var(--rad-sm);
   color: var(--fg-1);
 }
+
+.detail-verdict {
+  background: color-mix(in srgb, var(--ark-amber-600) 8%, transparent);
+  border-left: 3px solid var(--ark-amber-600);
+  padding: var(--sp-3);
+  border-radius: var(--rad-sm);
+  color: var(--fg-1);
+  font-style: italic;
+}
+
+.usefulness-pill {
+  display: inline-block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-bold);
+  padding: 2px 8px;
+  border-radius: var(--rad-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.usefulness-pill.score-green { background: color-mix(in srgb, var(--ark-green-600) 15%, transparent); }
+.usefulness-pill.score-yellow { background: color-mix(in srgb, var(--ark-amber-600) 15%, transparent); }
+.usefulness-pill.score-red { background: color-mix(in srgb, var(--ark-red-600) 15%, transparent); }
 
 .context-loading {
   padding: var(--sp-2) 0;
