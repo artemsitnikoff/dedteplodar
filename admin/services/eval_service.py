@@ -116,7 +116,10 @@ def compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict[
             ).label('error_count'),
             sql_func.avg(EvalResult.latency_ms).label('avg_latency_ms'),
             sql_func.min(EvalResult.top_score).label('min_score'),
-            sql_func.max(EvalResult.top_score).label('max_score')
+            sql_func.max(EvalResult.top_score).label('max_score'),
+            # LLM-judge usefulness: primary quality signal
+            sql_func.avg(EvalResult.usefulness_score).label('avg_usefulness'),
+            sql_func.count(EvalResult.usefulness_score).label('judged_count'),
         )
         .where(EvalResult.run_id.in_(run_ids))
         .group_by(EvalResult.run_id)
@@ -133,9 +136,15 @@ def compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict[
         error_count = int(row.error_count) if row.error_count else 0
         error_rate = round(error_count / total, 4) if total > 0 else None
         avg_latency_ms = int(row.avg_latency_ms) if row.avg_latency_ms is not None else None
+        avg_usefulness = round(float(row.avg_usefulness), 1) if row.avg_usefulness is not None else None
+        judged_count = int(row.judged_count or 0)
 
-        # Calculate quality score
-        if avg_score is not None and type_accuracy is not None:
+        # quality_score — single source of truth.
+        # Prefer LLM-judge (avg_usefulness) when we have enough samples;
+        # fall back to the legacy composite for old runs without judging.
+        if avg_usefulness is not None and judged_count >= max(1, total // 2):
+            quality = avg_usefulness  # already 0-100
+        elif avg_score is not None and type_accuracy is not None:
             quality = 100 * (0.7 * avg_score + 0.3 * type_accuracy)
         elif avg_score is not None:
             quality = 100 * avg_score
@@ -150,6 +159,8 @@ def compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict[
             "error_count": error_count,
             "error_rate": error_rate,
             "avg_latency_ms": avg_latency_ms,
+            "avg_usefulness": avg_usefulness,
+            "judged_count": judged_count,
             "quality_score": round(quality, 1) if quality is not None else None,
         }
 
@@ -159,9 +170,11 @@ def compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict[
             aggregates[run_id] = {
                 "avg_score": None,
                 "type_accuracy": None,
-                "error_count": 0,  # 0 when aggregates computed but no results, vs None when not computed at all
+                "error_count": 0,
                 "error_rate": None,
                 "avg_latency_ms": None,
+                "avg_usefulness": None,
+                "judged_count": 0,
                 "quality_score": None,
             }
 
@@ -222,11 +235,16 @@ def serialise_result_without_answer(r: EvalResult) -> dict[str, Any]:
         "chunks_used": r.chunks_used,
         "latency_ms": r.latency_ms,
         "error": r.error,
+        "usefulness_score": r.usefulness_score,
+        "usefulness_verdict": r.usefulness_verdict,
     }
 
 
 def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> dict:
     """Process a single question. Each call runs in its own thread with its own DB session."""
+    from src.core.config import settings
+    from src.eval.judge import judge_answer
+
     t0 = time.monotonic()
     actual_type = top_score = chunks_used = answer = error = None
 
@@ -243,6 +261,25 @@ def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> di
 
     latency_ms = int((time.monotonic() - t0) * 1000)
 
+    # LLM-as-judge: scored usefulness of the answer (0-100) — single source
+    # of truth for quality_score going forward. Skip if there's no answer
+    # (the run errored out).
+    usefulness_score = None
+    usefulness_verdict = None
+    if answer and not error:
+        verdict = judge_answer(
+            item["question"], answer,
+            cli_path=settings.claude_cli_path,
+            model=settings.claude_reformulation_model,  # Haiku — fast judge
+        )
+        if verdict:
+            usefulness_score = verdict["score"]
+            usefulness_verdict = verdict["verdict"]
+            logger.info(
+                "[eval] run=%s q=%s usefulness=%d (%s)",
+                run_id, item["id"], usefulness_score, usefulness_verdict[:80],
+            )
+
     result_row = EvalResult(
         run_id=run_id,
         question_id=item["id"],
@@ -255,6 +292,8 @@ def _eval_one(item: dict, run_id: int, generator, db_lock: threading.Lock) -> di
         answer=answer,
         latency_ms=latency_ms,
         error=error,
+        usefulness_score=usefulness_score,
+        usefulness_verdict=usefulness_verdict,
     )
 
     # Serialize DB writes — SQLite doesn't support concurrent writes

@@ -30,6 +30,8 @@ export function computeRunStats(run, results) {
     typeAcc: run.type_accuracy,
     errorCount: run.error_count ?? 0,
     avgLatency: run.avg_latency_ms,
+    avgUsefulness: run.avg_usefulness,
+    judgedCount: run.judged_count ?? 0,
     deltaQuality: run.delta_quality,
     deltaAvg: run.delta_avg_score,
     deltaTypeAcc: run.delta_type_accuracy,

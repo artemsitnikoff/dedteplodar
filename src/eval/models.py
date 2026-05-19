@@ -47,6 +47,11 @@ class EvalResult(Base):
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # LLM judge — measures whether the bot's answer was actually useful to
+    # the client (0-100). Independent of expected_type matching. See
+    # src/eval/judge.py.
+    usefulness_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    usefulness_verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     run: Mapped["EvalRun"] = relationship("EvalRun", back_populates="results")
 
@@ -55,22 +60,36 @@ class EvalResult(Base):
 Base.metadata.create_all(bind=engine, checkfirst=True)
 
 
-# Idempotent migration: add dataset_name column to legacy eval_runs tables.
-def _ensure_dataset_name_column() -> None:
+# Idempotent migrations for legacy DBs.
+def _ensure_migrations() -> None:
     try:
         insp = inspect(engine)
-        if "eval_runs" not in insp.get_table_names():
-            return
-        cols = {c["name"] for c in insp.get_columns("eval_runs")}
-        if "dataset_name" not in cols:
+
+        # eval_runs.dataset_name
+        if "eval_runs" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("eval_runs")}
+            if "dataset_name" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE eval_runs ADD COLUMN dataset_name VARCHAR(32) "
+                        "NOT NULL DEFAULT 'synthetic'"
+                    ))
+
+        # eval_results.usefulness_*
+        if "eval_results" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("eval_results")}
             with engine.begin() as conn:
-                conn.execute(text(
-                    "ALTER TABLE eval_runs ADD COLUMN dataset_name VARCHAR(32) "
-                    "NOT NULL DEFAULT 'synthetic'"
-                ))
+                if "usefulness_score" not in cols:
+                    conn.execute(text(
+                        "ALTER TABLE eval_results ADD COLUMN usefulness_score INTEGER"
+                    ))
+                if "usefulness_verdict" not in cols:
+                    conn.execute(text(
+                        "ALTER TABLE eval_results ADD COLUMN usefulness_verdict TEXT"
+                    ))
     except Exception:
         import logging
-        logging.getLogger(__name__).exception("dataset_name migration failed")
+        logging.getLogger(__name__).exception("eval migrations failed")
 
 
-_ensure_dataset_name_column()
+_ensure_migrations()

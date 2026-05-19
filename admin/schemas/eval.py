@@ -39,6 +39,8 @@ class RunSummary(BaseModel):
     error_count: Optional[int] = None
     error_rate: Optional[float] = None
     avg_latency_ms: Optional[int] = None
+    avg_usefulness: Optional[float] = None  # LLM-judge 0-100, primary signal
+    judged_count: Optional[int] = None
     quality_score: Optional[float] = None
 
     # Delta vs the previous run (only on /eval/runs list)
@@ -68,6 +70,8 @@ class EvalResultLite(BaseModel):
     chunks_used: Optional[int] = None
     latency_ms: Optional[int] = None
     error: Optional[str] = None
+    usefulness_score: Optional[int] = None
+    usefulness_verdict: Optional[str] = None
 
 
 class RunDetailResponse(RunSummary):

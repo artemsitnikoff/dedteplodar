@@ -199,6 +199,7 @@ defineExpose({ loadRuns, runs })
                   <col style="width: 110px" />
                   <col style="width: 110px" />
                   <col style="width: 64px" />
+                  <col style="width: 56px" />
                   <col style="width: 70px" />
                 </colgroup>
                 <thead>
@@ -209,6 +210,7 @@ defineExpose({ loadRuns, runs })
                     <th>Ожид. тип</th>
                     <th>Факт. тип</th>
                     <th>Score</th>
+                    <th title="LLM-judge usefulness 0-100">Useful</th>
                     <th>Latency</th>
                   </tr>
                 </thead>
@@ -216,6 +218,7 @@ defineExpose({ loadRuns, runs })
                   <EvalResultRow
                     v-for="result in expandedRunData.results"
                     :key="result.question_id"
+                    :colspan="8"
                     :result="result"
                     :is-open="expandedAnswerIds.has(result.question_id)"
                     @toggle="toggleAnswer"

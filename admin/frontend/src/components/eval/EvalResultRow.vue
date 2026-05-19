@@ -2,6 +2,13 @@
 import { scoreColor } from '@/utils/format.js'
 import { categoryBadgeClass, qtypeCls, qtypeLabel } from '@/utils/badges.js'
 
+function usefulnessColor(score) {
+  if (score == null) return ''
+  if (score >= 75) return 'score-green'
+  if (score >= 50) return 'score-yellow'
+  return 'score-red'
+}
+
 const props = defineProps({
   result: {
     type: Object,
@@ -60,6 +67,14 @@ function handleLoadAnswer() {
       </span>
       <span v-else class="score-none">—</span>
     </td>
+    <td class="cell-score">
+      <span v-if="result.usefulness_score !== null && result.usefulness_score !== undefined"
+            :class="['usefulness-pill', usefulnessColor(result.usefulness_score)]"
+            :title="result.usefulness_verdict || ''">
+        {{ result.usefulness_score }}
+      </span>
+      <span v-else class="score-none">—</span>
+    </td>
     <td class="cell-num latency">
       {{ result.latency_ms !== null ? result.latency_ms + 'ms' : '—' }}
     </td>
@@ -68,6 +83,10 @@ function handleLoadAnswer() {
     <td :colspan="colspan">
       <div v-if="result.error" class="answer-error">⚠ {{ result.error }}</div>
       <div v-else-if="result.answer" class="answer-body">
+        <div v-if="result.usefulness_verdict" class="judge-verdict">
+          <b>Оценка LLM-судьи:</b> {{ result.usefulness_score }}/100 —
+          <i>{{ result.usefulness_verdict }}</i>
+        </div>
         <pre class="answer-text">{{ result.answer }}</pre>
       </div>
       <div v-else class="answer-empty">
@@ -79,6 +98,29 @@ function handleLoadAnswer() {
 </template>
 
 <style scoped>
+.usefulness-pill {
+  display: inline-block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-bold);
+  padding: 2px 8px;
+  border-radius: var(--rad-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.usefulness-pill.score-green { background: color-mix(in srgb, var(--ark-green-600) 15%, transparent); }
+.usefulness-pill.score-yellow { background: color-mix(in srgb, var(--ark-amber-600) 15%, transparent); }
+.usefulness-pill.score-red { background: color-mix(in srgb, var(--ark-red-600) 15%, transparent); }
+
+.judge-verdict {
+  background: color-mix(in srgb, var(--ark-amber-600) 7%, transparent);
+  border-left: 3px solid var(--ark-amber-600);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--rad-sm);
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--fg-1);
+}
+
 /* Row styles will be inherited from parent table styles */
 .answer-text {
   white-space: pre-wrap;

@@ -45,6 +45,17 @@ const props = defineProps({
             </span>
           </div>
         </div>
+        <div v-if="summary.avgUsefulness !== null && summary.avgUsefulness !== undefined" class="summary-row">
+          <span class="summary-label" title="LLM-as-judge — основная метрика">Useful (LLM-judge):</span>
+          <div class="summary-values">
+            <span :class="['summary-val', qualityColor(summary.avgUsefulness)]">
+              {{ fmtQuality(summary.avgUsefulness) }}
+            </span>
+            <span class="summary-count" v-if="summary.judgedCount">
+              ({{ summary.judgedCount }}/{{ summary.total }})
+            </span>
+          </div>
+        </div>
       </div>
 
       <div class="summary-group">
