@@ -198,8 +198,9 @@ def extract_intent(
     if model:
         args += ["--model", model]
 
+    from src.core.claude_cli import claude_cli_slot
     try:
-        with tempfile.TemporaryDirectory(prefix="claude_intent_") as cwd:
+        with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_intent_") as cwd:
             result = subprocess.run(
                 args,
                 input=prompt.encode(),
@@ -209,7 +210,7 @@ def extract_intent(
                 cwd=cwd,
                 timeout=LLM_TIMEOUT,
             )
-        text = result.stdout.decode().strip()
+            text = result.stdout.decode().strip()
     except Exception as exc:
         logger.warning("intent extractor subprocess failed: %s", exc)
         return None

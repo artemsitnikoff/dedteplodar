@@ -83,16 +83,17 @@ def judge_answer(
     if model:
         args += ["--model", model]
 
+    from src.core.claude_cli import claude_cli_slot
     try:
-        # Isolated cwd per call — concurrent CLI invocations won't conflict
-        # on session-state files Claude CLI might drop into the cwd.
-        with tempfile.TemporaryDirectory(prefix="claude_judge_") as cwd:
+        # Isolated cwd per call + global cross-process slot lock so we
+        # don't fan out 20 concurrent CLI procs against the Pro account.
+        with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_judge_") as cwd:
             result = subprocess.run(
                 args, input=prompt.encode(),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, cwd=cwd, timeout=LLM_TIMEOUT,
             )
-        text = result.stdout.decode().strip()
+            text = result.stdout.decode().strip()
     except Exception as e:
         logger.warning("judge subprocess failed: %s", e)
         return None

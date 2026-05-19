@@ -257,15 +257,16 @@ def classify_one(conv: Conversation, cli_path: str, model: str) -> dict:
     if model:
         args += ["--model", model]
 
+    from src.core.claude_cli import claude_cli_slot
     t0 = time.monotonic()
     try:
-        with tempfile.TemporaryDirectory(prefix="claude_analyze_") as cwd:
+        with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_analyze_") as cwd:
             result = subprocess.run(
                 args, input=prompt.encode(),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, cwd=cwd, timeout=LLM_TIMEOUT,
             )
-        raw = result.stdout.decode().strip()
+            raw = result.stdout.decode().strip()
     except Exception as e:
         return {"file": conv.file, "error": f"subprocess: {e}"}
 
@@ -369,14 +370,15 @@ def aggregate(classified: list[dict], cli_path: str, model: str) -> dict:
     if model:
         args += ["--model", model]
 
+    from src.core.claude_cli import claude_cli_slot
     t0 = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="claude_aggregate_") as cwd:
+    with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_aggregate_") as cwd:
         result = subprocess.run(
             args, input=prompt.encode(),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, cwd=cwd, timeout=600,
         )
-    raw = result.stdout.decode().strip()
+        raw = result.stdout.decode().strip()
     log.info("Aggregator returned in %.1fs (rc=%s)", time.monotonic() - t0, result.returncode)
 
     if result.returncode != 0 or not raw:

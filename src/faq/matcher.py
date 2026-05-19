@@ -118,8 +118,9 @@ class FaqMatcher:
         if self.llm_model:
             args += ["--model", self.llm_model]
 
+        from src.core.claude_cli import claude_cli_slot
         try:
-            with tempfile.TemporaryDirectory(prefix="claude_faq_") as cwd:
+            with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_faq_") as cwd:
                 result = subprocess.run(
                     args,
                     input=prompt.encode(),
@@ -129,7 +130,7 @@ class FaqMatcher:
                     cwd=cwd,
                     timeout=LLM_TIMEOUT,
                 )
-            text = result.stdout.decode().strip().strip('"\'').strip()
+                text = result.stdout.decode().strip().strip('"\'').strip()
         except Exception as exc:
             logger.warning("FAQ LLM match failed (%s) — falling through to RAG", exc)
             return None
@@ -163,10 +164,6 @@ class FaqMatcher:
             answer=entry.answer,
             score=1.0,  # LLM-decided binary match
         )
-
-    def reload(self) -> None:
-        """Force an immediate reload from DB (call after admin creates/updates entries)."""
-        self._reload()
 
     # ──────────────────────────── internal
 

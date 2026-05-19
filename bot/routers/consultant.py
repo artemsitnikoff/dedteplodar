@@ -59,6 +59,12 @@ _background_tasks: set[asyncio.Task] = set()
 # Bounded parallelism for the judge — avoids DoS-ing ourselves with concurrent
 # Claude CLI subprocesses on a traffic spike. ~2 keeps Pro rate-limits sane
 # and matches eval workers.
+#
+# NOTE: this semaphore is per-process. Bot, admin and eval-workers each have
+# their own — under heavy load the total concurrent Claude CLI subprocess
+# count is bot_cap (2) + admin eval workers (4) + N answer-generation calls.
+# If Pro 429s become frequent, replace with a file-lock or posix_ipc named
+# semaphore in `src/core/claude_token.py`.
 _judge_semaphore: asyncio.Semaphore | None = None  # lazily inited on first use
 
 
@@ -122,6 +128,19 @@ def _debug_footer(meta: AnswerMeta) -> str:
 
     line = "\n\n<i>🔧 " + " · ".join(parts) + "</i>"
 
+    # Per-phase timing breakdown — collapses to nothing if no phase ran.
+    timing_bits: list[str] = []
+    if meta.t_intent_ms is not None:
+        timing_bits.append(f"intent <code>{meta.t_intent_ms}мс</code>")
+    if meta.t_retrieval_ms is not None:
+        timing_bits.append(f"ret <code>{meta.t_retrieval_ms}мс</code>")
+    if meta.t_answer_ms is not None:
+        timing_bits.append(f"ans <code>{meta.t_answer_ms}мс</code>")
+    if meta.t_answer_model:
+        timing_bits.append(f"model <code>{meta.t_answer_model}</code>")
+    if timing_bits:
+        line += "\n<i>⏲ " + " · ".join(timing_bits) + "</i>"
+
     if meta.reformulated_query:
         short = meta.reformulated_query[:90] + ("…" if len(meta.reformulated_query) > 90 else "")
         line += f"\n<i>🔍 <code>{short}</code></i>"
@@ -166,6 +185,9 @@ def _get_log_entry(bot_msg_id: int) -> dict:
     """Get entry from memory store or fall back to DB lookup."""
     entry = _msg_store.get(bot_msg_id)
     if entry:
+        # Refresh LRU position — active conversations shouldn't get evicted
+        # while idle chats are sitting near the front of the OrderedDict.
+        _msg_store.move_to_end(bot_msg_id)
         return entry
     # Bot was restarted — recover from DB
     try:
@@ -175,7 +197,7 @@ def _get_log_entry(bot_msg_id: int) -> dict:
                 select(QueryLog).where(QueryLog.bot_message_id == bot_msg_id)
             ).scalar_one_or_none()
             if row:
-                return {
+                recovered = {
                     "log_id": row.id,
                     "question": row.question,
                     "answer": row.answer,
@@ -183,6 +205,10 @@ def _get_log_entry(bot_msg_id: int) -> dict:
                     "username": row.username or "",
                     "meta": {"query_type": row.query_type},
                 }
+                # Cache recovery so subsequent feedback clicks on the same
+                # message don't hit the DB again.
+                _msg_store_set(bot_msg_id, recovered)
+                return recovered
     except Exception as e:
         logger.warning("DB fallback for feedback failed: %s", e)
     return {}
@@ -253,9 +279,29 @@ async def _typing_loop(bot, chat_id: int, stop: asyncio.Event) -> None:
         await asyncio.sleep(4)
 
 
-def _call_generator(query: str, user_id: int) -> tuple[str, AnswerMeta]:
-    with SessionLocal() as session:
-        return _generator.answer_with_meta(session, query, user_id=user_id)
+# Telegram edit_message_text rate-limits at roughly 1/sec per chat. We
+# throttle intermediate edits to a slightly longer interval so streaming
+# can't hit the rate-limit ceiling. Telegram also caps a single message at
+# 4096 chars — we leave headroom for the debug footer and "…" indicator.
+_STREAM_EDIT_INTERVAL_SEC = 1.2
+_TELEGRAM_MSG_MAX = 3800
+
+
+async def _run_generator_streaming(
+    query: str,
+    user_id: int,
+    on_delta,
+) -> tuple[str, AnswerMeta]:
+    """Run the (blocking) generator in a thread, forwarding text deltas
+    back to the async event loop via `on_delta(text)` — which is a thread-
+    safe scheduling closure that the caller built around `call_soon_threadsafe`.
+    """
+    def _worker() -> tuple[str, AnswerMeta]:
+        with SessionLocal() as session:
+            return _generator.answer_with_meta(
+                session, query, user_id=user_id, on_chunk=on_delta,
+            )
+    return await asyncio.to_thread(_worker)
 
 
 @router.message(StateFilter(None), F.text)
@@ -277,11 +323,53 @@ async def handle_question(message: Message) -> None:
         logger.info("Synonyms applied: %r → %r", query, canonical_query)
         query = canonical_query
 
+    # Send placeholder immediately so the user sees something within 100ms
+    # while intent extraction (Haiku ~3-5s) runs.
+    bot_msg = await message.answer("⏳ <i>Готовлю ответ…</i>", reply_markup=_feedback_kb(0))
+
     stop_event = asyncio.Event()
     typing_task = asyncio.create_task(_typing_loop(message.bot, message.chat.id, stop_event))
 
+    # Stream-bridge: worker thread pushes deltas through call_soon_threadsafe
+    # to the asyncio.Queue we drain in this coroutine.
+    loop = asyncio.get_running_loop()
+    delta_queue: asyncio.Queue = asyncio.Queue()
+
+    def _on_delta_threadsafe(delta: str) -> None:
+        loop.call_soon_threadsafe(delta_queue.put_nowait, delta)
+
+    gen_task = asyncio.create_task(
+        _run_generator_streaming(query, message.from_user.id, _on_delta_threadsafe),
+    )
+
+    # Drain deltas while generator runs; edit message periodically.
+    accumulated_raw = ""
+    last_edit_at = 0.0
     try:
-        answer, meta = await asyncio.to_thread(_call_generator, query, message.from_user.id)
+        while not gen_task.done() or not delta_queue.empty():
+            try:
+                delta = await asyncio.wait_for(delta_queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+            accumulated_raw += delta
+            now = loop.time()
+            if now - last_edit_at >= _STREAM_EDIT_INTERVAL_SEC:
+                preview = accumulated_raw
+                if len(preview) > _TELEGRAM_MSG_MAX:
+                    preview = preview[-_TELEGRAM_MSG_MAX:]
+                try:
+                    await bot_msg.edit_text(preview + " ▌", parse_mode=None)
+                    last_edit_at = now
+                except Exception as e:
+                    # TelegramBadRequest (message-not-modified, parse errors) etc.
+                    logger.debug("intermediate edit failed: %s", e)
+
+        answer, meta = await gen_task
+        # No final drain needed — `answer` is the authoritative text
+        # (assembled by `_stream_collect` from the same deltas via the
+        # parts list), and the final `bot_msg.edit_text(full_text)` below
+        # replaces the preview entirely. `accumulated_raw` is only used
+        # for the intermediate "▌"-suffixed previews while streaming.
     except Exception as e:
         logger.error("Generator error: %s", e, exc_info=True)
         answer = (
@@ -298,10 +386,20 @@ async def handle_question(message: Message) -> None:
             pass
 
     full_text = answer + _debug_footer(meta)
-
-    bot_msg = await message.answer(full_text, reply_markup=_feedback_kb(0))
-    real_kb = _feedback_kb(bot_msg.message_id)
-    await bot_msg.edit_reply_markup(reply_markup=real_kb)
+    # Final edit — full HTML-rendered text, real keyboard.
+    try:
+        await bot_msg.edit_text(full_text, reply_markup=_feedback_kb(bot_msg.message_id))
+    except Exception as e:
+        logger.warning("final edit failed (%s) — sending as new message", e)
+        # New message gets NO keyboard until we know its real message_id —
+        # a placeholder `_feedback_kb(0)` would mean clicks during the
+        # gap between send and edit_reply_markup hit a dead lookup. Send
+        # without keyboard first, then attach with the correct id.
+        bot_msg = await message.answer(full_text)
+        try:
+            await bot_msg.edit_reply_markup(reply_markup=_feedback_kb(bot_msg.message_id))
+        except Exception as e2:
+            logger.warning("fallback keyboard re-bind failed: %s", e2)
 
     log_id = _save_query_log(
         user_id=message.from_user.id,

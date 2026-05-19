@@ -31,6 +31,14 @@ async def main() -> None:
     from src.core.claude_token import init_token_file
     init_token_file()
 
+    # Touch model modules so their import-time schema init runs, then verify
+    # every probe reported OK. Fail-fast here is preferable to crashing on
+    # the first user query against a broken schema.
+    import src.logs.models  # noqa: F401
+    import src.eval.models  # noqa: F401
+    from src.core.migrations import assert_schema_ready
+    assert_schema_ready(expected=["query_logs", "eval"])
+
     # Load heavy models once at startup
     logger.info("Loading embedding model…")
     from src.rag.embedder import E5Embedder
@@ -57,7 +65,8 @@ async def main() -> None:
         retriever=retriever,
         mode="cli",
         cli_path=settings.claude_cli_path,
-        reformulation_model=settings.claude_reformulation_model,
+        model=settings.claude_model,                       # final answer (Sonnet)
+        reformulation_model=settings.claude_reformulation_model,  # intent (Haiku)
         faq_matcher=faq_matcher,
     )
     init_generator(generator)

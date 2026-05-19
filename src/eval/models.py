@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func, inspect, text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func, inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.database import Base, engine
+from src.core.migrations import register_schema_probe, safe_alter
 
 
 class EvalRun(Base):
@@ -56,23 +57,8 @@ class EvalResult(Base):
     run: Mapped["EvalRun"] = relationship("EvalRun", back_populates="results")
 
 
-# Create tables if they don't exist yet (safe to call multiple times)
-Base.metadata.create_all(bind=engine, checkfirst=True)
-
-
 # Idempotent migrations for legacy DBs.
-# bot + admin import this module concurrently. Two-process race on ALTER
-# is handled by treating "duplicate column" / "already exists" as success.
-def _safe_alter(conn, sql: str) -> None:
-    try:
-        conn.execute(text(sql))
-    except Exception as e:
-        msg = str(e).lower()
-        if "duplicate column" in msg or "already exists" in msg:
-            return
-        raise
-
-
+# See src/core/migrations.py for race-handling details.
 def _ensure_migrations() -> None:
     try:
         insp = inspect(engine)
@@ -81,7 +67,7 @@ def _ensure_migrations() -> None:
             cols = {c["name"] for c in insp.get_columns("eval_runs")}
             if "dataset_name" not in cols:
                 with engine.begin() as conn:
-                    _safe_alter(conn,
+                    safe_alter(conn,
                         "ALTER TABLE eval_runs ADD COLUMN dataset_name VARCHAR(32) "
                         "NOT NULL DEFAULT 'synthetic'")
 
@@ -89,14 +75,29 @@ def _ensure_migrations() -> None:
             cols = {c["name"] for c in insp.get_columns("eval_results")}
             with engine.begin() as conn:
                 if "usefulness_score" not in cols:
-                    _safe_alter(conn,
+                    safe_alter(conn,
                         "ALTER TABLE eval_results ADD COLUMN usefulness_score INTEGER")
                 if "usefulness_verdict" not in cols:
-                    _safe_alter(conn,
+                    safe_alter(conn,
                         "ALTER TABLE eval_results ADD COLUMN usefulness_verdict TEXT")
     except Exception:
         import logging
         logging.getLogger(__name__).exception("eval migrations failed")
 
 
-_ensure_migrations()
+# Run ALTERs only if create_all() succeeded — if the engine is broken
+# there's no point trying to ALTER tables that don't exist.
+_schema_ok = False
+try:
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[EvalRun.__table__, EvalResult.__table__],
+        checkfirst=True,
+    )
+    _ensure_migrations()
+    _schema_ok = True
+except Exception:
+    import logging
+    logging.getLogger(__name__).exception("eval schema init failed")
+
+register_schema_probe("eval", lambda: _schema_ok)

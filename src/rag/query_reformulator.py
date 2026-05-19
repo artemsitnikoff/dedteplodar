@@ -59,8 +59,9 @@ def reformulate(query: str, cli_path: str = "claude", model: str = "") -> str:
     if model:
         args += ["--model", model]
 
+    from src.core.claude_cli import claude_cli_slot
     try:
-        with tempfile.TemporaryDirectory(prefix="claude_reform_") as cwd:
+        with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_reform_") as cwd:
             result = subprocess.run(
                 args,
                 input=prompt.encode(),
@@ -70,7 +71,7 @@ def reformulate(query: str, cli_path: str = "claude", model: str = "") -> str:
                 cwd=cwd,
                 timeout=30,
             )
-        text = result.stdout.decode().strip()
+            text = result.stdout.decode().strip()
         if result.returncode == 0 and text:
             text = text.strip('"\'')
             logger.debug("Reformulated: %r → %r", query[:50], text[:80])

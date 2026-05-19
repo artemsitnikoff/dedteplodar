@@ -29,6 +29,14 @@ async def lifespan(app: FastAPI):
             "ADMIN_PASS environment variable is required. Set it before "
             "starting the admin service (no default is provided)."
         )
+
+    # Fail-fast if any model module failed its schema init on import —
+    # don't let the admin start serving requests against a broken DB.
+    import src.logs.models  # noqa: F401
+    import src.eval.models  # noqa: F401
+    from src.core.migrations import assert_schema_ready
+    assert_schema_ready(expected=["query_logs", "eval"])
+
     yield
 
 

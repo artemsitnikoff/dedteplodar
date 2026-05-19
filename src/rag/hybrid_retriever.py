@@ -46,6 +46,10 @@ class HybridRetriever:
         self.product_boost = product_boost
         self._bm25: Optional[BM25Okapi] = None
         self._bm25_ids: Optional[list[int]] = None  # chunk index → position in metadata
+        # Pre-computed product-chunk mask, built once in _ensure_bm25 and
+        # reused per request. Boost via vectorised add instead of a 3k-element
+        # Python loop on every search call.
+        self._product_mask: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------ BM25
     def _ensure_bm25(self) -> None:
@@ -58,6 +62,12 @@ class HybridRetriever:
         corpus = [_tokenize(m["chunk_text"]) for m in meta]
         self._bm25 = BM25Okapi(corpus)
         self._bm25_ids = list(range(len(meta)))
+        # Boolean → float32 mask of product chunks, ready to be added to
+        # the fused score vector without a per-request Python loop.
+        self._product_mask = np.fromiter(
+            (1.0 if m.get("chunk_type") == "product" else 0.0 for m in meta),
+            dtype=np.float32, count=len(meta),
+        )
         logger.info("BM25 index ready.")
 
     # ------------------------------------------------------------------ API
@@ -96,11 +106,9 @@ class HybridRetriever:
         # ── Fusion ────────────────────────────────────────────────────────
         hybrid = self.alpha * dense_norm + (1.0 - self.alpha) * bm25_norm
 
-        # ── Product chunk boost ───────────────────────────────────────────
-        if self.product_boost > 0:
-            for idx in range(len(meta)):
-                if meta[idx].get("chunk_type") == "product":
-                    hybrid[idx] = min(1.0, hybrid[idx] + self.product_boost)
+        # ── Product chunk boost (vectorised, cap at 1.0) ──────────────────
+        if self.product_boost > 0 and self._product_mask is not None:
+            hybrid = np.minimum(1.0, hybrid + self._product_mask * self.product_boost)
 
         top_idx = np.argsort(hybrid)[::-1]
 

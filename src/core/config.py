@@ -54,8 +54,16 @@ class Settings(BaseSettings):
     claude_code_oauth_token: str = Field(default="")
     claude_refresh_token: str = Field(default="")
     claude_cli_path: str = Field(default="claude")
-    claude_model: str = Field(default="")              # empty = CLI default (Opus)
-    claude_reformulation_model: str = Field(default="")  # empty = CLI default (Opus)
+    # Final-answer model. Sonnet ~3-5s vs Opus ~15-20s for ~200 tokens, with
+    # near-equivalent quality on Russian RAG. Empty string = CLI's own default.
+    claude_model: str = Field(default="claude-sonnet-4-5")
+    # Intent extraction / reformulation — Haiku is plenty fast.
+    claude_reformulation_model: str = Field(default="claude-haiku-4-5-20251001")
+    # Cross-process upper bound on concurrent Claude CLI subprocesses.
+    # Bot + admin + eval workers all share this cap via a file-lock pool —
+    # protects the Pro OAuth account from 429-storm under traffic spikes.
+    claude_cli_max_concurrent: int = Field(default=4)
+    claude_cli_slots_dir: Path = Field(default=Path("/tmp/teplodar_claude_slots"))
 
     def __post_init__(self):
         """Ensure directories exist."""

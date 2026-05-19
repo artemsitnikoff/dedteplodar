@@ -34,6 +34,14 @@ class AnswerMeta:
     shops_count: int = 0                   # shops found (DEALER queries)
     reformulated_query: str | None = None  # query after reformulation (RAG only)
     latency_ms: int | None = None          # total generation time (retrieval + LLM)
+    # Phase breakdowns — written by answer_with_meta so we can see where
+    # the wall time goes per request. All in milliseconds, None if the
+    # phase didn't run on this path.
+    t_history_ms: int | None = None        # pulling last 3 Q&A from query_logs
+    t_intent_ms: int | None = None         # Claude CLI Haiku (intent extract)
+    t_retrieval_ms: int | None = None      # E5 embed + BM25 + fusion + dedup
+    t_answer_ms: int | None = None         # Claude CLI final answer call
+    t_answer_model: str | None = None      # which model served the final answer
 
 logger = logging.getLogger(__name__)
 
@@ -318,8 +326,22 @@ _DISALLOWED_TOOLS = (
 )
 
 
-def _call_cli(prompt: str, cli_path: str = "claude") -> str:
-    """Call Claude CLI subprocess. Uses Pro subscription via OAuth token."""
+def _call_cli_stream(
+    prompt: str,
+    cli_path: str = "claude",
+    model: str = "",
+) -> Iterator[str]:
+    """Stream Claude CLI output chunk-by-chunk via Popen.
+
+    Why: `subprocess.run(...).stdout` blocks for the whole inference. With
+    a 20-token-per-second model that's 15-20 s before the user sees ANY
+    text — Telegram shows "typing…" the whole time. Streaming via Popen
+    surfaces the first words within 1-2 s of model start.
+
+    Output is plain text (CLI's `--output-format text` flushes
+    progressively as the model generates). Each `read1` returns whatever
+    bytes are currently available up to the buffer size.
+    """
     from ..core.claude_token import ensure_fresh_token_sync
     ensure_fresh_token_sync()
 
@@ -327,15 +349,125 @@ def _call_cli(prompt: str, cli_path: str = "claude") -> str:
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
 
-    with tempfile.TemporaryDirectory(prefix="claude_answer_") as cwd:
+    args = [
+        cli_path,
+        "--print",
+        "--output-format", "text",
+        "--no-session-persistence",
+        "--disallowed-tools", _DISALLOWED_TOOLS,
+    ]
+    if model:
+        args += ["--model", model]
+
+    from ..core.claude_cli import claude_cli_slot
+    t_sub = time.monotonic()
+    first_chunk_at: float | None = None
+    total_bytes = 0
+    rc: int | None = None
+    # Capture stderr eagerly inside the `with` block — by the time we
+    # raise on rc!=0 below, the proc pipes may already be closed by
+    # gc / TemporaryDirectory teardown.
+    stderr_data = b""
+    with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_answer_") as cwd:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=cwd,
+            bufsize=0,
+        )
+        if not (proc.stdin and proc.stdout and proc.stderr):
+            raise RuntimeError("Popen failed to attach all pipes")
+        try:
+            proc.stdin.write(prompt.encode())
+            proc.stdin.close()
+            while True:
+                # read1 returns whatever bytes are available right now,
+                # up to the requested size. Blocks only if nothing is ready.
+                chunk = proc.stdout.read1(4096)
+                if not chunk:
+                    break
+                if first_chunk_at is None:
+                    first_chunk_at = time.monotonic()
+                total_bytes += len(chunk)
+                yield chunk.decode("utf-8", errors="replace")
+            proc.wait(timeout=10)
+            rc = proc.returncode
+            if rc != 0:
+                # Bounded read — guard against a buggy/hostile CLI dumping
+                # megabytes of stderr; we only log the first 300 chars.
+                stderr_data = proc.stderr.read(65536)
+        except Exception as exc:
+            # Kill FIRST, then read stderr. `proc.stderr.read()` on a
+            # live process can block until EOF (the pipe stays open as
+            # long as the child holds its write-end). Killing forces
+            # the kernel to close the write-end, after which `.read()`
+            # returns whatever is buffered + b"" — never hangs.
+            try:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass  # zombie, best we can do
+                if proc.stderr:
+                    try:
+                        stderr_data = proc.stderr.read(65536)
+                    except Exception:
+                        pass
+            except Exception:
+                pass  # kill itself failed — keep stderr_data as-is (b"")
+            logger.warning(
+                "[answer-cli-stream] subprocess aborted: %s — stderr=%r",
+                exc, stderr_data[:300],
+            )
+            raise
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    total_s = time.monotonic() - t_sub
+    ttfb_ms = int((first_chunk_at - t_sub) * 1000) if first_chunk_at else None
+    logger.info(
+        "[answer-cli-stream] model=%s rc=%s ttfb=%sms total=%.2fs bytes=%d",
+        model or "(default)", rc, ttfb_ms if ttfb_ms is not None else "—",
+        total_s, total_bytes,
+    )
+    if rc != 0:
+        err = stderr_data.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"claude CLI (code {rc}): {err}")
+    if total_bytes == 0:
+        raise RuntimeError("claude CLI returned empty response")
+
+
+def _call_cli(prompt: str, cli_path: str = "claude", model: str = "") -> str:
+    """Call Claude CLI subprocess. Uses Pro subscription via OAuth token.
+
+    `model` is forwarded as `--model <...>`. Empty string = CLI default.
+    """
+    from ..core.claude_token import ensure_fresh_token_sync
+    ensure_fresh_token_sync()
+
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+
+    args = [
+        cli_path,
+        "--print",
+        "--output-format", "text",
+        "--no-session-persistence",
+        "--disallowed-tools", _DISALLOWED_TOOLS,
+    ]
+    if model:
+        args += ["--model", model]
+
+    from ..core.claude_cli import claude_cli_slot
+    t_sub = time.monotonic()
+    with claude_cli_slot(), tempfile.TemporaryDirectory(prefix="claude_answer_") as cwd:
         result = subprocess.run(
-            [
-                cli_path,
-                "--print",
-                "--output-format", "text",
-                "--no-session-persistence",
-                "--disallowed-tools", _DISALLOWED_TOOLS,
-            ],
+            args,
             input=prompt.encode(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -343,6 +475,10 @@ def _call_cli(prompt: str, cli_path: str = "claude") -> str:
             cwd=cwd,
             timeout=120,
         )
+    logger.info(
+        "[answer-cli] model=%s subprocess=%.2fs rc=%d",
+        model or "(default)", time.monotonic() - t_sub, result.returncode,
+    )
     if result.returncode != 0:
         err = (result.stderr.decode().strip() or result.stdout.decode().strip())[:300]
         raise RuntimeError(f"claude CLI (code {result.returncode}): {err}")
@@ -364,7 +500,7 @@ class AnswerGenerator:
         retriever: HybridRetriever,
         mode: str = "cli",
         cli_path: str = "claude",
-        model: str = "claude-opus-4-7",
+        model: str = "claude-sonnet-4-5",
         reformulation_model: str = "claude-haiku-4-5-20251001",
         top_k: int = 5,
         faq_matcher=None,
@@ -372,6 +508,7 @@ class AnswerGenerator:
         self.retriever = retriever
         self.mode = mode
         self.cli_path = cli_path
+        self.answer_model = model            # forwarded to --model in CLI mode
         self.reformulation_model = reformulation_model
         self.top_k = top_k
         self.faq_matcher = faq_matcher
@@ -390,6 +527,12 @@ class AnswerGenerator:
 
     # ─────────────────────────────────────────────── public
 
+    def _answer_model_label(self) -> str:
+        """Short label of the model that served the final answer (for logs/footer)."""
+        if self.mode == "api":
+            return getattr(self, "_model", "api")
+        return self.answer_model or "cli-default"
+
     def answer(self, session: Session, query: str) -> str:
         answer, _ = self.answer_with_meta(session, query)
         return answer
@@ -399,6 +542,7 @@ class AnswerGenerator:
         session: Session,
         query: str,
         user_id: int | None = None,
+        on_chunk=None,
     ) -> tuple[str, AnswerMeta]:
         """Return (answer_text, metadata).
 
@@ -416,9 +560,12 @@ class AnswerGenerator:
 
         t0 = time.monotonic()
 
+        t_history_start = time.monotonic()
         history = get_recent_dialog(user_id) if user_id else []
+        t_history_ms = int((time.monotonic() - t_history_start) * 1000)
 
         faq_entries = self.faq_matcher._entries if self.faq_matcher else []
+        t_intent_start = time.monotonic()
         intent = extract_intent(
             query,
             faq_entries,
@@ -426,16 +573,22 @@ class AnswerGenerator:
             model=self.reformulation_model,
             history=history,
         )
+        t_intent_ms = int((time.monotonic() - t_intent_start) * 1000)
+        logger.info("[timing] history=%dms intent=%dms", t_history_ms, t_intent_ms)
 
         if intent is None:
             # LLM failed — degrade to the old code path so the user still gets an answer.
             answer, meta = self._answer_legacy(session, query, t0)
+            meta.t_history_ms = t_history_ms
+            meta.t_intent_ms = t_intent_ms
             return answer, meta
 
         # 1) FAQ match takes precedence
         if intent.faq_match_id is not None and self.faq_matcher:
             entry = self.faq_matcher._entries[intent.faq_match_id]
             meta = AnswerMeta(query_type="FAQ_EXACT", top_score=1.0)
+            meta.t_history_ms = t_history_ms
+            meta.t_intent_ms = t_intent_ms
             meta.latency_ms = int((time.monotonic() - t0) * 1000)
             return entry.answer, meta
 
@@ -443,12 +596,29 @@ class AnswerGenerator:
         if intent.intent == "FAQ_DEALER":
             answer, meta = self._handle_dealer_meta(query, city_hint=intent.city)
         elif intent.intent == "FAQ_COMPANY":
-            answer = "".join(self._call_claude(query, chunks=[], history=history))
+            t_ans_start = time.monotonic()
+            answer = self._stream_collect(
+                self._call_claude(query, chunks=[], history=history),
+                on_chunk,
+            )
             meta = AnswerMeta(query_type="FAQ_COMPANY")
+            meta.t_answer_ms = int((time.monotonic() - t_ans_start) * 1000)
+            meta.t_answer_model = self._answer_model_label()
         else:
-            answer, meta = self._handle_rag_meta(session, query, intent=intent, history=history)
+            answer, meta = self._handle_rag_meta(
+                session, query, intent=intent, history=history, on_chunk=on_chunk,
+            )
 
+        meta.t_history_ms = t_history_ms
+        meta.t_intent_ms = t_intent_ms
         meta.latency_ms = int((time.monotonic() - t0) * 1000)
+        logger.info(
+            "[timing] total=%dms (history=%dms intent=%dms retrieval=%sms answer=%sms model=%s)",
+            meta.latency_ms, meta.t_history_ms, meta.t_intent_ms,
+            meta.t_retrieval_ms if meta.t_retrieval_ms is not None else "—",
+            meta.t_answer_ms if meta.t_answer_ms is not None else "—",
+            meta.t_answer_model or "—",
+        )
         return answer, meta
 
     def _answer_legacy(self, session: Session, query: str, t0: float) -> tuple[str, AnswerMeta]:
@@ -493,7 +663,26 @@ class AnswerGenerator:
             meta,
         )
 
-    def _handle_rag_meta(self, session: Session, query: str, intent=None, history=None) -> tuple[str, AnswerMeta]:
+    def _stream_collect(self, iterator: Iterator[str], on_chunk=None) -> str:
+        """Consume a streaming-text iterator, fanning each delta to `on_chunk`
+        if provided, and return the full text with markdown→HTML applied.
+
+        Markdown rendering is applied to the FULL string at the end so
+        partially-streamed bold/italic markers don't get garbled in
+        intermediate previews. Telegram permits us to edit the message
+        once more after streaming completes."""
+        parts: list[str] = []
+        for delta in iterator:
+            parts.append(delta)
+            if on_chunk is not None:
+                try:
+                    on_chunk(delta)
+                except Exception as cb_exc:
+                    logger.warning("on_chunk callback failed: %s", cb_exc)
+        return _md_to_html("".join(parts))
+
+    def _handle_rag_meta(self, session: Session, query: str, intent=None, history=None, on_chunk=None) -> tuple[str, AnswerMeta]:
+        t_ret_start = time.monotonic()
         # Use the LLM-reformulated query if intent extractor produced one,
         # otherwise call the legacy reformulator (used by the fallback path).
         if intent and intent.reformulated_query:
@@ -558,6 +747,8 @@ class AnswerGenerator:
             if matched_city and shops:
                 dealer_block = format_dealer_reply(city)
 
+        t_retrieval_ms = int((time.monotonic() - t_ret_start) * 1000)
+
         meta = AnswerMeta(
             query_type=QueryType.RAG_PRODUCT.value,
             top_score=results[0].score if results else None,
@@ -565,9 +756,20 @@ class AnswerGenerator:
             reformulated_query=retrieval_query if retrieval_query != query else None,
             city=matched_city if dealer_block else None,
             shops_count=len(shops) if dealer_block else 0,
+            t_retrieval_ms=t_retrieval_ms,
         )
         # Answer uses the original query so the LLM sees natural language
-        answer = "".join(self._call_claude(query, chunks=results, dealer_block=dealer_block, history=history))
+        t_ans_start = time.monotonic()
+        answer = self._stream_collect(
+            self._call_claude(query, chunks=results, dealer_block=dealer_block, history=history),
+            on_chunk,
+        )
+        meta.t_answer_ms = int((time.monotonic() - t_ans_start) * 1000)
+        meta.t_answer_model = self._answer_model_label()
+        logger.info(
+            "[timing] retrieval=%dms answer=%dms",
+            meta.t_retrieval_ms, meta.t_answer_ms,
+        )
         return answer, meta
 
     # ─────────────────────────────────────────────── LLM dispatch
@@ -588,7 +790,10 @@ class AnswerGenerator:
         history: list[dict] | None = None,
     ) -> Iterator[str]:
         prompt = _build_full_prompt(query, chunks, dealer_block, history)
-        yield _md_to_html(_call_cli(prompt, self.cli_path))
+        # Stream raw text deltas. Markdown→HTML conversion is applied by
+        # the caller AFTER streaming completes (Telegram needs the full
+        # message before parse_mode=HTML can be rendered safely).
+        yield from _call_cli_stream(prompt, self.cli_path, self.answer_model)
 
     def _call_api_mode(
         self, query: str, chunks: list[SearchResult],
