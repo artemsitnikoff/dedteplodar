@@ -211,6 +211,10 @@ def serialise_run(run: EvalRun, aggregates: dict[str, Any] | None = None) -> dic
         "total": run.total,
         "completed": run.completed,
         "note": run.note,
+        # Without this the Pydantic RunSummary schema fills the field with
+        # its own default ("synthetic"), so every run displayed in History
+        # would look like a synthetic one regardless of what it actually ran.
+        "dataset_name": getattr(run, "dataset_name", None) or "synthetic",
     }
     if aggregates is not None:
         base.update(aggregates)
