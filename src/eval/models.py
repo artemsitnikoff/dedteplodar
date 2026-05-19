@@ -61,32 +61,39 @@ Base.metadata.create_all(bind=engine, checkfirst=True)
 
 
 # Idempotent migrations for legacy DBs.
+# bot + admin import this module concurrently. Two-process race on ALTER
+# is handled by treating "duplicate column" / "already exists" as success.
+def _safe_alter(conn, sql: str) -> None:
+    try:
+        conn.execute(text(sql))
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return
+        raise
+
+
 def _ensure_migrations() -> None:
     try:
         insp = inspect(engine)
 
-        # eval_runs.dataset_name
         if "eval_runs" in insp.get_table_names():
             cols = {c["name"] for c in insp.get_columns("eval_runs")}
             if "dataset_name" not in cols:
                 with engine.begin() as conn:
-                    conn.execute(text(
+                    _safe_alter(conn,
                         "ALTER TABLE eval_runs ADD COLUMN dataset_name VARCHAR(32) "
-                        "NOT NULL DEFAULT 'synthetic'"
-                    ))
+                        "NOT NULL DEFAULT 'synthetic'")
 
-        # eval_results.usefulness_*
         if "eval_results" in insp.get_table_names():
             cols = {c["name"] for c in insp.get_columns("eval_results")}
             with engine.begin() as conn:
                 if "usefulness_score" not in cols:
-                    conn.execute(text(
-                        "ALTER TABLE eval_results ADD COLUMN usefulness_score INTEGER"
-                    ))
+                    _safe_alter(conn,
+                        "ALTER TABLE eval_results ADD COLUMN usefulness_score INTEGER")
                 if "usefulness_verdict" not in cols:
-                    conn.execute(text(
-                        "ALTER TABLE eval_results ADD COLUMN usefulness_verdict TEXT"
-                    ))
+                    _safe_alter(conn,
+                        "ALTER TABLE eval_results ADD COLUMN usefulness_verdict TEXT")
     except Exception:
         import logging
         logging.getLogger(__name__).exception("eval migrations failed")

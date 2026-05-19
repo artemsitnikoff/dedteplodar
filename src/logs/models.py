@@ -36,6 +36,20 @@ class QueryLog(Base):
 # ── Idempotent migrations for legacy DBs ──────────────
 # SQLAlchemy create_all() never alters existing tables. Run one-shot
 # ALTERs on import so existing prod DBs pick up new columns.
+#
+# Two processes (bot + admin) import this module concurrently — both may
+# check `cols` before either ALTERs. One ALTER wins, the other gets
+# "duplicate column name", which we treat as success.
+def _safe_alter(conn, sql: str) -> None:
+    try:
+        conn.execute(text(sql))
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            return  # another process won the race — that's fine
+        raise
+
+
 def _ensure_migrations() -> None:
     try:
         insp = inspect(engine)
@@ -44,11 +58,11 @@ def _ensure_migrations() -> None:
         cols = {c["name"] for c in insp.get_columns("query_logs")}
         with engine.begin() as conn:
             if "feedback_note" not in cols:
-                conn.execute(text("ALTER TABLE query_logs ADD COLUMN feedback_note TEXT"))
+                _safe_alter(conn, "ALTER TABLE query_logs ADD COLUMN feedback_note TEXT")
             if "usefulness_score" not in cols:
-                conn.execute(text("ALTER TABLE query_logs ADD COLUMN usefulness_score INTEGER"))
+                _safe_alter(conn, "ALTER TABLE query_logs ADD COLUMN usefulness_score INTEGER")
             if "usefulness_verdict" not in cols:
-                conn.execute(text("ALTER TABLE query_logs ADD COLUMN usefulness_verdict TEXT"))
+                _safe_alter(conn, "ALTER TABLE query_logs ADD COLUMN usefulness_verdict TEXT")
     except Exception:
         import logging
         logging.getLogger(__name__).exception("query_logs migrations failed")

@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
@@ -198,15 +199,16 @@ def extract_intent(
         args += ["--model", model]
 
     try:
-        result = subprocess.run(
-            args,
-            input=prompt.encode(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd="/tmp",
-            timeout=LLM_TIMEOUT,
-        )
+        with tempfile.TemporaryDirectory(prefix="claude_intent_") as cwd:
+            result = subprocess.run(
+                args,
+                input=prompt.encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                cwd=cwd,
+                timeout=LLM_TIMEOUT,
+            )
         text = result.stdout.decode().strip()
     except Exception as exc:
         logger.warning("intent extractor subprocess failed: %s", exc)

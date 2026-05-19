@@ -23,9 +23,14 @@ class BadFeedback(StatesGroup):
     waiting_for_note = State()  # user pressed 👎, we're waiting for the explanation
 
 from src.core.config import settings
+from collections import OrderedDict
+
+from sqlalchemy import update
+
 from src.core.database import SessionLocal
 from src.logs.models import QueryLog
 from src.rag.answer_generator import AnswerGenerator, AnswerMeta
+from src.synonyms.store import get_synonym_store
 
 logger = logging.getLogger("teplodarbot")
 router = Router()
@@ -33,8 +38,36 @@ router = Router()
 _FEEDBACK_LOG = Path("base/feedback.jsonl")
 _FEEDBACK_LOG.parent.mkdir(parents=True, exist_ok=True)
 
-# In-memory store: bot_msg_id → {"user_id", "question", "answer", "meta", "log_id"}
-_msg_store: dict[int, dict] = {}
+# Bounded LRU: bot_msg_id → entry. Evicts oldest beyond the cap so a long-
+# running bot can't leak memory from inactive chats.
+_MSG_STORE_MAX = 2000
+_msg_store: "OrderedDict[int, dict]" = OrderedDict()
+
+
+def _msg_store_set(key: int, entry: dict) -> None:
+    _msg_store[key] = entry
+    _msg_store.move_to_end(key)
+    while len(_msg_store) > _MSG_STORE_MAX:
+        _msg_store.popitem(last=False)
+
+
+# Background-task registry — must hold strong refs to asyncio.Task objects,
+# otherwise the event loop's weak reference lets the GC collect tasks before
+# they finish (documented anti-pattern, Python issue 88831).
+_background_tasks: set[asyncio.Task] = set()
+
+# Bounded parallelism for the judge — avoids DoS-ing ourselves with concurrent
+# Claude CLI subprocesses on a traffic spike. ~2 keeps Pro rate-limits sane
+# and matches eval workers.
+_judge_semaphore: asyncio.Semaphore | None = None  # lazily inited on first use
+
+
+def _get_judge_semaphore() -> asyncio.Semaphore:
+    global _judge_semaphore
+    if _judge_semaphore is None:
+        _judge_semaphore = asyncio.Semaphore(2)
+    return _judge_semaphore
+
 
 _generator: AnswerGenerator | None = None
 
@@ -158,25 +191,35 @@ def _get_log_entry(bot_msg_id: int) -> dict:
 async def _judge_in_background(log_id: int, question: str, answer: str) -> None:
     """Run the LLM-as-judge after the user already got the response.
 
-    Writes usefulness_score / usefulness_verdict back to the QueryLog row
-    so the admin Journal shows quality per-message. Failures are swallowed
-    — the user already has their answer; missing score is acceptable.
+    Bound by a global semaphore so a traffic spike doesn't fan out into N
+    parallel Claude CLI subprocesses. Updates ONLY usefulness_* columns
+    via explicit UPDATE so a concurrent user-feedback write (👍/👎) on the
+    same row doesn't race-overwrite. Failures swallowed — best effort.
     """
     try:
-        from src.eval.judge import judge_answer
-        # Off the event loop — subprocess call to Claude CLI is blocking
-        verdict = await asyncio.to_thread(
-            judge_answer, question, answer,
-            settings.claude_cli_path,
-            settings.claude_reformulation_model,  # Haiku
-        )
-        if not verdict:
-            return
-        with SessionLocal() as s:
-            row = s.get(QueryLog, log_id)
-            if row:
-                row.usefulness_score = verdict["score"]
-                row.usefulness_verdict = verdict["verdict"]
+        async with _get_judge_semaphore():
+            from src.eval.judge import judge_answer
+            # Off the event loop — subprocess call to Claude CLI is blocking
+            verdict = await asyncio.to_thread(
+                judge_answer, question, answer,
+                settings.claude_cli_path,
+                settings.claude_reformulation_model,  # Haiku
+            )
+            if not verdict:
+                return
+            with SessionLocal() as s:
+                # Targeted UPDATE: do NOT load the row through ORM and re-emit
+                # every column — feedback / feedback_note might have been
+                # written by another transaction during the ~2s judge call.
+                stmt = (
+                    update(QueryLog)
+                    .where(QueryLog.id == log_id)
+                    .values(
+                        usefulness_score=verdict["score"],
+                        usefulness_verdict=verdict["verdict"],
+                    )
+                )
+                s.execute(stmt)
                 s.commit()
         logger.info(
             "Judge log=%s score=%d (%s)",
@@ -229,7 +272,6 @@ async def handle_question(message: Message) -> None:
     # like "трус двенадцать" → "Русь-12" or "билетная горелка" → "пеллетная
     # горелка" become canonical before the intent extractor sees them, so
     # retrieval and FAQ matching work as intended.
-    from src.synonyms.store import get_synonym_store
     canonical_query = get_synonym_store().apply(query)
     if canonical_query != query:
         logger.info("Synonyms applied: %r → %r", query, canonical_query)
@@ -272,10 +314,14 @@ async def handle_question(message: Message) -> None:
 
     # Fire-and-forget LLM judge — user already received the answer, this
     # adds a usefulness score to the journal row in the background.
+    # Strong-ref the task in _background_tasks so Python's GC doesn't drop
+    # it before completion (anti-pattern: bare create_task without ref).
     if log_id and answer and meta.query_type != "ERROR":
-        asyncio.create_task(_judge_in_background(log_id, query, answer))
+        task = asyncio.create_task(_judge_in_background(log_id, query, answer))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
-    _msg_store[bot_msg.message_id] = {
+    _msg_store_set(bot_msg.message_id, {
         "user_id": message.from_user.id,
         "username": message.from_user.username or "",
         "question": query,
@@ -288,7 +334,7 @@ async def handle_question(message: Message) -> None:
             "city": meta.city,
             "shops_count": meta.shops_count,
         },
-    }
+    })
 
 
 @router.callback_query(F.data.startswith("fb:good:"))

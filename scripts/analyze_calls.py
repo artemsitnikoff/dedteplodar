@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -258,11 +259,12 @@ def classify_one(conv: Conversation, cli_path: str, model: str) -> dict:
 
     t0 = time.monotonic()
     try:
-        result = subprocess.run(
-            args, input=prompt.encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=env, cwd="/tmp", timeout=LLM_TIMEOUT,
-        )
+        with tempfile.TemporaryDirectory(prefix="claude_analyze_") as cwd:
+            result = subprocess.run(
+                args, input=prompt.encode(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, cwd=cwd, timeout=LLM_TIMEOUT,
+            )
         raw = result.stdout.decode().strip()
     except Exception as e:
         return {"file": conv.file, "error": f"subprocess: {e}"}
@@ -368,11 +370,12 @@ def aggregate(classified: list[dict], cli_path: str, model: str) -> dict:
         args += ["--model", model]
 
     t0 = time.monotonic()
-    result = subprocess.run(
-        args, input=prompt.encode(),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env=env, cwd="/tmp", timeout=600,
-    )
+    with tempfile.TemporaryDirectory(prefix="claude_aggregate_") as cwd:
+        result = subprocess.run(
+            args, input=prompt.encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env, cwd=cwd, timeout=600,
+        )
     raw = result.stdout.decode().strip()
     log.info("Aggregator returned in %.1fs (rc=%s)", time.monotonic() - t0, result.returncode)
 

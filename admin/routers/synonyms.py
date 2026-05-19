@@ -79,8 +79,13 @@ async def delete_synonym(syn_id: int, db: Session = Depends(get_db)):
 
 @router.post("/reload", status_code=204)
 async def force_reload():
-    """Force the bot's in-memory cache to reload immediately (next request
-    would do it within ~10s anyway, but this is useful right after a bulk
-    edit / import)."""
+    """Reload synonym cache.
+
+    NOTE: this only reloads the admin process's own SynonymStore singleton.
+    The bot runs in a separate process and polls the DB every 10 seconds —
+    new/edited synonyms reach Telegram users within ≤10s automatically,
+    regardless of this endpoint. Kept for symmetry / future use (e.g. if
+    we add an admin-side feature that also reads synonyms).
+    """
     from src.synonyms.store import get_synonym_store
     get_synonym_store().reload()

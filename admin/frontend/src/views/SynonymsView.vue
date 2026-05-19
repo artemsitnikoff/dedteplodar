@@ -115,7 +115,9 @@ async function remove(s) {
 async function reload() {
   try {
     await api.reloadSynonyms()
-    toast('Бот перечитал словарь', 'success')
+    // The bot lives in a separate process and polls every ~10s; this
+    // call only nudges the admin's own cache. Inform the user honestly.
+    toast('Кеш админки обновлён. Бот подхватит изменения в течение 10 секунд.', 'success')
   } catch {
     toast('Ошибка перезагрузки', 'error')
   }
@@ -132,8 +134,8 @@ onMounted(load)
         <span class="page-count">{{ total }} записей</span>
       </div>
       <div class="actions">
-        <button class="btn btn-secondary" @click="reload" title="Заставить бот перечитать словарь сейчас">
-          ↻ Reload бота
+        <button class="btn btn-secondary" @click="reload" title="Перечитать кеш админки. Бот опрашивает БД сам каждые 10с.">
+          ↻ Reload кеша
         </button>
         <button class="btn btn-primary" @click="openNew">+ Новый синоним</button>
       </div>

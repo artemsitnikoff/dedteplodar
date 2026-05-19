@@ -142,7 +142,9 @@ def compute_aggregates_batch(db: Session, run_ids: list[int]) -> dict[int, dict[
         # quality_score — single source of truth.
         # Prefer LLM-judge (avg_usefulness) when we have enough samples;
         # fall back to the legacy composite for old runs without judging.
-        if avg_usefulness is not None and judged_count >= max(1, total // 2):
+        # Require ≥10 judgments AND ≥50% coverage — avoids the metric
+        # flipping back and forth between formulas on tiny runs.
+        if avg_usefulness is not None and judged_count >= 10 and judged_count >= total // 2:
             quality = avg_usefulness  # already 0-100
         elif avg_score is not None and type_accuracy is not None:
             quality = 100 * (0.7 * avg_score + 0.3 * type_accuracy)

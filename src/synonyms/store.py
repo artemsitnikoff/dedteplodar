@@ -28,6 +28,7 @@ class SynonymStore:
         self._rules: list[tuple[str, str]] = []  # (term, canonical), longest first
         self._regex: Optional[re.Pattern] = None
         self._term_to_canonical: dict[str, str] = {}
+        self._entries_cache: list = []  # init here so all_active() works even if first _reload fails
         self._last_loaded: float = 0.0
         self._reload()
 
@@ -81,15 +82,16 @@ class SynonymStore:
             mapping[term.lower()] = canonical
 
         if rules:
-            # Build one big alternation. (?i) for case-insensitive,
-            # (?<!\w) and (?!\w) for unicode-aware word boundaries
-            # (\b in re is ASCII-only for some libraries).
+            # Build one big alternation. re.UNICODE explicit so \w matches
+            # cyrillic in any Python build configuration (default for str in
+            # Py3, but we don't rely on the default). re.IGNORECASE lets the
+            # term match in any case the user types.
             pattern = (
-                r"(?<!\w)(?i:"
+                r"(?<!\w)(?:"
                 + "|".join(re.escape(term) for term, _ in rules)
                 + r")(?!\w)"
             )
-            self._regex = re.compile(pattern)
+            self._regex = re.compile(pattern, re.IGNORECASE | re.UNICODE)
         else:
             self._regex = None
 

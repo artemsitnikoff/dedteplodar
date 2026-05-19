@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -118,15 +119,16 @@ class FaqMatcher:
             args += ["--model", self.llm_model]
 
         try:
-            result = subprocess.run(
-                args,
-                input=prompt.encode(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                cwd="/tmp",
-                timeout=LLM_TIMEOUT,
-            )
+            with tempfile.TemporaryDirectory(prefix="claude_faq_") as cwd:
+                result = subprocess.run(
+                    args,
+                    input=prompt.encode(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    cwd=cwd,
+                    timeout=LLM_TIMEOUT,
+                )
             text = result.stdout.decode().strip().strip('"\'').strip()
         except Exception as exc:
             logger.warning("FAQ LLM match failed (%s) — falling through to RAG", exc)

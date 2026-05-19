@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -83,11 +84,14 @@ def judge_answer(
         args += ["--model", model]
 
     try:
-        result = subprocess.run(
-            args, input=prompt.encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=env, cwd="/tmp", timeout=LLM_TIMEOUT,
-        )
+        # Isolated cwd per call — concurrent CLI invocations won't conflict
+        # on session-state files Claude CLI might drop into the cwd.
+        with tempfile.TemporaryDirectory(prefix="claude_judge_") as cwd:
+            result = subprocess.run(
+                args, input=prompt.encode(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, cwd=cwd, timeout=LLM_TIMEOUT,
+            )
         text = result.stdout.decode().strip()
     except Exception as e:
         logger.warning("judge subprocess failed: %s", e)

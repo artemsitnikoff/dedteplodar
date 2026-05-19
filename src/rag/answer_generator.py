@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -326,21 +327,22 @@ def _call_cli(prompt: str, cli_path: str = "claude") -> str:
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
 
-    result = subprocess.run(
-        [
-            cli_path,
-            "--print",
-            "--output-format", "text",
-            "--no-session-persistence",
-            "--disallowed-tools", _DISALLOWED_TOOLS,
-        ],
-        input=prompt.encode(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        cwd="/tmp",
-        timeout=120,
-    )
+    with tempfile.TemporaryDirectory(prefix="claude_answer_") as cwd:
+        result = subprocess.run(
+            [
+                cli_path,
+                "--print",
+                "--output-format", "text",
+                "--no-session-persistence",
+                "--disallowed-tools", _DISALLOWED_TOOLS,
+            ],
+            input=prompt.encode(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=cwd,
+            timeout=120,
+        )
     if result.returncode != 0:
         err = (result.stderr.decode().strip() or result.stdout.decode().strip())[:300]
         raise RuntimeError(f"claude CLI (code {result.returncode}): {err}")

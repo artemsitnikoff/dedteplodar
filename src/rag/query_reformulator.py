@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +60,16 @@ def reformulate(query: str, cli_path: str = "claude", model: str = "") -> str:
         args += ["--model", model]
 
     try:
-        result = subprocess.run(
-            args,
-            input=prompt.encode(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd="/tmp",
-            timeout=30,
-        )
+        with tempfile.TemporaryDirectory(prefix="claude_reform_") as cwd:
+            result = subprocess.run(
+                args,
+                input=prompt.encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                cwd=cwd,
+                timeout=30,
+            )
         text = result.stdout.decode().strip()
         if result.returncode == 0 and text:
             text = text.strip('"\'')
