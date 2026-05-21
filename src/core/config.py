@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     claude_cli_path: str = Field(default="claude")
     # Final-answer model. Sonnet ~3-5s vs Opus ~15-20s for ~200 tokens, with
     # near-equivalent quality on Russian RAG. Empty string = CLI's own default.
-    claude_model: str = Field(default="claude-sonnet-4-5")
+    claude_model: str = Field(default="claude-sonnet-4-6")
     # Intent extraction / reformulation — Haiku is plenty fast.
     claude_reformulation_model: str = Field(default="claude-haiku-4-5-20251001")
     # Cross-process upper bound on concurrent Claude CLI subprocesses.
