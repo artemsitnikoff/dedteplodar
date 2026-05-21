@@ -290,15 +290,42 @@ def _format_history_for_prompt(history: list[dict] | None) -> str | None:
     return "\n".join(lines)
 
 
+_CHUNK_CAP_CHARS = 700  # ~175 tokens; keeps head+tail of each retrieved chunk
+
+
+def _truncate_chunk_text(text: str, max_chars: int = _CHUNK_CAP_CHARS) -> str:
+    """Smart truncate that preserves both ends of a chunk.
+
+    Catalog chunks tend to have product name + intro at the start and
+    technical params (kW, kg, prices, parilka volume) at the end. A naive
+    `[:N]` drops the params; a tail-only cut loses the model name. We
+    keep both, joined with "...", so the LLM sees enough to identify the
+    product AND its key spec values.
+    """
+    if len(text) <= max_chars:
+        return text
+    head_n = (max_chars * 2) // 3   # 2/3 to head — name + description
+    tail_n = max_chars - head_n - 3  # rest to tail, minus "..." separator
+    return text[:head_n].rstrip() + "..." + text[-tail_n:].lstrip()
+
+
 def _build_full_prompt(
     query: str,
     chunks: list[SearchResult],
     dealer_block: str | None = None,
     history: list[dict] | None = None,
 ) -> str:
-    """Combine system prompt + FAQ + (optional) dialog history + RAG chunks +
-    (optional) dealer info + current user query."""
-    parts = [_SYSTEM_PROMPT, "", _FAQ_TEXT, ""]
+    """Combine system prompt + (optional) FAQ + history + RAG chunks +
+    (optional) dealer info + current user query.
+
+    Note: the static `_FAQ_TEXT` block is only included when no RAG chunks
+    were retrieved (FAQ_COMPANY path). For RAG_PRODUCT queries the chunks
+    already provide what the LLM needs, and the company FAQ is noise that
+    inflates the prompt by ~400 tokens for nothing.
+    """
+    parts = [_SYSTEM_PROMPT, ""]
+    if not chunks:
+        parts.extend([_FAQ_TEXT, ""])
     history_block = _format_history_for_prompt(history)
     if history_block:
         parts.append(
@@ -307,7 +334,7 @@ def _build_full_prompt(
         )
     if chunks:
         fragments = "\n\n".join(
-            f"[{i+1}] (тип: {c.chunk_type})\n{c.chunk_text.strip()}"
+            f"[{i+1}] (тип: {c.chunk_type})\n{_truncate_chunk_text(c.chunk_text.strip())}"
             for i, c in enumerate(chunks)
         )
         parts.append(f"Фрагменты из базы знаний:\n{fragments}\n")
