@@ -384,9 +384,11 @@ def _call_cli_stream(
             proc.stdin.write(prompt.encode())
             proc.stdin.close()
             while True:
-                # read1 returns whatever bytes are available right now,
-                # up to the requested size. Blocks only if nothing is ready.
-                chunk = proc.stdout.read1(4096)
+                # With bufsize=0 stdout is raw FileIO (no BufferedReader,
+                # no `read1`). FileIO.read(N) does one os.read syscall:
+                # returns up to N bytes when ANY arrive, b"" on EOF — the
+                # exact streaming semantics we want.
+                chunk = proc.stdout.read(4096)
                 if not chunk:
                     break
                 if first_chunk_at is None:
