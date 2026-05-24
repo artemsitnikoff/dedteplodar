@@ -222,8 +222,26 @@ def _extract_city(query: str) -> str | None:
     return None
 
 
+_URL_RE = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
+
+
 def _md_to_html(text: str) -> str:
-    """Convert any residual Markdown to Telegram HTML as a safety net."""
+    """Convert any residual Markdown to Telegram HTML as a safety net.
+
+    URLs are protected from markdown processing first — `_` and `*` inside
+    URLs (e.g. https://teplodar.ru/catalog/detail/kaskad_12_t/) would
+    otherwise be eaten by the italic/bold regexes (`_12_` → `<i>12</i>`),
+    silently corrupting links.
+    """
+    # 1) Stash URLs behind placeholders so markdown rules can't touch them.
+    placeholders: list[str] = []
+    def _stash(match: re.Match) -> str:
+        placeholders.append(match.group(0))
+        # \x00 is illegal in our outputs (we only emit text) — safe sentinel.
+        return f"\x00U{len(placeholders) - 1}\x00"
+    text = _URL_RE.sub(_stash, text)
+
+    # 2) Apply markdown → HTML conversions on the URL-free text.
     # **bold** → <b>bold</b>  (must run before single-star)
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text, flags=re.DOTALL)
     # *italic* (lone stars, not already converted)
@@ -236,6 +254,10 @@ def _md_to_html(text: str) -> str:
     text = re.sub(r"`([^`]+?)`", r"<code>\1</code>", text)
     # ### Heading → <b>Heading</b>
     text = re.sub(r"^#{1,3}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
+
+    # 3) Restore URLs verbatim.
+    for i, url in enumerate(placeholders):
+        text = text.replace(f"\x00U{i}\x00", url)
     return text
 
 

@@ -95,7 +95,7 @@ def _feedback_kb(bot_msg_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-BOT_VERSION = "1.3"
+BOT_VERSION = "1.3.1"
 
 
 def _debug_footer(meta: AnswerMeta) -> str:
