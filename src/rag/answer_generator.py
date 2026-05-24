@@ -782,10 +782,17 @@ class AnswerGenerator:
             if is_listing:
                 results = _dedup_by_product(results, limit=_LISTING_TOP_K)
 
-        # wants_link from intent (LLM-decided) or regex fallback
+        # Always inject product URLs into chunks — the LLM should know what
+        # link goes with which product even if the user didn't explicitly
+        # ask for one. Previously we gated on `wants_link`, which made the
+        # bot reply "ссылки нет в базе" when the user was *correcting* a
+        # URL ("у тебя неправильная ссылка") — Haiku correctly classified
+        # that as not-asking-for-a-link, but the bot then had no link to
+        # confirm. Token cost: ~12 chars per chunk = negligible vs answer.
+        # `wants_link` is still read so the LLM's intent envelope stays
+        # complete and logs/footer can show what was detected.
         wants_link = intent.wants_link if intent else _user_wants_link(query)
-        if wants_link:
-            _enrich_chunks_with_product_urls(session, results)
+        _enrich_chunks_with_product_urls(session, results)
 
         # Compound merge: if the user named a city, inject the dealer block
         # so one RAG answer covers both "что за товар" and "где купить".
