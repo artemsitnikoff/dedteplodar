@@ -8,7 +8,7 @@ RAG-консультант по продукции компании «Тепло
 - **Админка**: FastAPI (бэк) + Vue 3 SPA (фронт, Vite)
 - **БД знаний**: SQLite (`base/teplodar.db`) + numpy-индексы (`base/embeddings.npy` + `base/chunk_metadata.pkl`)
 - **RAG**: гибрид BM25 + dense (E5 multilingual base, 768d) с fusion `α=0.6`, мин-макс нормализация скоров
-- **LLM**: Claude CLI subprocess (Pro-подписка, не API). Переформулировка запроса — Haiku 4.5 (быстро), генерация ответа — модель по умолчанию (Opus)
+- **LLM**: Claude CLI subprocess (Pro-подписка, не API). Intent extraction (всё-в-одном) — Haiku 4.5, генерация финального ответа — **Sonnet 4.6** (раньше был Opus, переключили из-за latency). OpenRouter/API mode откладывали из-за стоимости (~$390/мес на 1k запросов/день).
 
 ## Запуск (dev)
 
@@ -44,16 +44,22 @@ python scripts/build_index.py --rebuild
 ## Прод-сервер (важно)
 
 - ArkadiyJarvis уже задеплоен на проде в **`/var/www/ArkadiyJarvis`**
-- Teplodarbot ставится отдельно (например `/var/www/teplodarbot` или `~/teplodarbot`)
+- Teplodarbot живёт в **`/var/www/dedteplodar`** (исторически назвали `dedteplodar`)
 - Папка `data/` внутри teplodarbot — это **симлинк** на `/var/www/ArkadiyJarvis/data`, НЕ отдельная директория. Так Claude OAuth-токен общий, и авто-рефреш не дублируется между проектами.
-- При первом деплое: `ln -s /var/www/ArkadiyJarvis/data /var/www/teplodarbot/data` (вместо `mkdir data`)
+- При первом деплое: `ln -s /var/www/ArkadiyJarvis/data /var/www/dedteplodar/data` (вместо `mkdir data`)
 - В docker-compose том `./data:/app/data` корректно следует через симлинк → внутри контейнера видно содержимое ArkadiyJarvis/data
+- **Деплой**: `cd /var/www/dedteplodar && git pull && docker compose up -d --build bot admin`. Первая сборка после holodnog cache ~10 мин (pip install torch+transformers). Последующие — ~30с если `requirements.txt` не менялся.
+- См. `DEPLOY.md` для полного чеклиста + бэкапов.
 
 ## Claude CLI auth
 
 Токен хранится в `data/.claude_token.json` (расшарено с ArkadiyJarvis). При запуске `init_token_file()` подгружает токен из env (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN`), если файла нет. Перед каждым вызовом CLI вызывается `ensure_fresh_token_sync()` — рефреш одноразовый, атомарная запись.
 
-CLI запускается с флагами: `--print --output-format text --no-session-persistence --disallowed-tools` и `cwd="/tmp"` чтобы CLI не использовал контекст текущей директории.
+CLI запускается с флагами `--print --output-format text --no-session-persistence --disallowed-tools --model <id>`. Каждый вызов получает **per-call `tempfile.TemporaryDirectory(prefix="claude_*")`** как `cwd` чтобы concurrent subprocess'ы не толкались на shared `/tmp`-state.
+
+**Cross-process semaphore** (`src/core/claude_cli.py`): file-lock slot pool (`fcntl.flock`) на N=4 слотах в `/tmp/teplodar_claude_slots/`. Бот, admin (eval workers) и скрипты делят cap чтобы не задосить Pro-аккаунт. Polling-loop с `time.sleep(0.1)` (не блокирующий `LOCK_EX`). При недоступной `/tmp` — graceful degrade на uncapped с одним ERROR-логом.
+
+**Streaming**: `_call_cli_stream` использует `subprocess.Popen(bufsize=0)` + `proc.stdout.read(4096)` в цикле, но **Claude Code CLI в `--print` режиме не стримит токены — отдаёт ответ одним блоком в конце**. Streaming-инфраструктура (Popen/Queue/edit_message_text) зашита целиком, "▌"-индикатор по факту не появляется. Если/когда перейдём на OpenRouter/API — оно сразу заработает как задумано (см. `scripts/openrouter_test.py` и `mode="api"` skeleton в `answer_generator.py`).
 
 ## Eval / Test Dataset
 
@@ -105,19 +111,62 @@ index_version = "e5-base-v1"
 device = "cpu"
 pdf_dedup_threshold = 0.92
 product_boost = 0.05
-claude_reformulation_model = "claude-haiku-4-5-20251001"
 claude_cli_path = "claude"
+claude_model = "claude-sonnet-4-6"                   # финальный ответ
+claude_reformulation_model = "claude-haiku-4-5-20251001"  # intent extract
+claude_cli_max_concurrent = 4                         # slot pool cap
+claude_cli_slots_dir = Path("/tmp/teplodar_claude_slots")
 ```
+
+## Performance / reliability — что сделано (релиз 1.3.x)
+
+Production timing на типичный RAG-вопрос (Sonnet ответ + Haiku intent):
+- До оптимизаций: total **~56с** (Opus 32с + intent 22с + retrieval 1.4с)
+- После: total **~30-40с** (Sonnet ~15-20с + Haiku ~10-14с)
+
+Что закоммитили:
+
+1. **Sonnet 4.6 вместо Opus** + проброс `--model` в `_call_cli` (раньше параметр игнорился, CLI шёл в Opus по дефолту). −10-15с.
+2. **Prompt-side оптимизации** (`src/rag/answer_generator.py`):
+   - `_build_full_prompt` НЕ инжектит `_FAQ_TEXT` если есть RAG-чанки (FAQ_COMPANY-путь — chunks=[] — оставляем). −0.8с.
+   - `_truncate_chunk_text(text, max_chars=700)` — smart truncate с сохранением головы (2/3) и хвоста (1/3 — ТТХ/цена). −2-3с на Sonnet.
+3. **E5 query LRU cache** (`src/rag/embedder.py:_query_cache`, 1000 entries, ключ нормализован через `" ".join(t.lower().split())`). Повторные запросы — 0мс вместо 500мс.
+4. **Vectorized product_boost** (`src/rag/hybrid_retriever.py`): предвычисленная `_product_mask: np.float32`, заменяет Python-loop по 2961 чанку. −30-100мс.
+5. **Per-phase timing breakdown** в `AnswerMeta` (`t_history_ms`, `t_intent_ms`, `t_retrieval_ms`, `t_answer_ms`, `t_answer_model`). Показывается в Telegram-футере: `⏲ intent X · ret Y · ans Z · model sonnet-4-6`. Также в логах: `[timing] total=Xms (...)` + `[answer-cli-stream] model=... rc=... ttfb=... total=... bytes=...`.
+
+Reliability:
+
+6. **Cross-process Claude CLI cap** (`src/core/claude_cli.py`) — fcntl slot pool, см. выше.
+7. **Schema fail-fast на boot** (`src/core/migrations.py:register_schema_probe` + `assert_schema_ready(expected=[...])`). `main_bot.py` и `admin/main.py:lifespan` вызывают перед стартом — упадём с понятным RuntimeError если миграция упала, а не на первой записи.
+8. **`_safe_alter` extracted** в `src/core/migrations.py`, дедуп между `logs/models.py` и `eval/models.py`. Ловит "duplicate column" / "already exists" как success в race-сценарии (бот + admin импортируют параллельно).
+9. **LRU `_msg_store`** (`bot/routers/consultant.py`, OrderedDict, MAX=2000, `move_to_end` на access) — настоящая LRU. DB-recovered entries кешируются обратно чтобы повторные feedback-клики не били БД.
+10. **Telegram fallback**: если финальный `edit_text(full_text, kb)` упадёт — отправляем новое сообщение БЕЗ keyboard, потом `edit_reply_markup` с правильным `message_id`. Никакого race-окна на `_feedback_kb(0)`.
+
+## URL handling в ответах (важно)
+
+Был баг: бот «исправлял» ссылку `kaskad_12_t/` на `kaskad<i>12</i>t/` потому что `_md_to_html` (safety net против markdown в ответе LLM) сжирал `_12_` как italic-markdown. Фикс — `_URL_RE` стэшит все `https?://...` в плейсхолдеры ДО применения markdown-rules, потом восстанавливает verbatim.
+
+Второй баг: URL подмешивался в product-чанки ТОЛЬКО когда `intent.wants_link=True`. Когда пользователь *исправлял* ссылку («у тебя неправильная»), Haiku корректно ставил `wants_link=False`, URL не доходил до LLM, бот честно говорил «нет ссылки в базе». Фикс — `_enrich_chunks_with_product_urls` теперь вызывается **всегда** в `_handle_rag_meta` (~125 токенов overhead, мизер). System prompt уже инструктирует «если есть `Ссылка:` — обязательно используй».
+
+## Диагностические скрипты
+
+- `scripts/perf_diagnose.py` — собирает реальный intent+answer промпт, дампит в `/tmp/prompt_*.txt`, замеряет CLI elapsed. Usage: `docker compose exec bot python scripts/perf_diagnose.py [--query "..."]`.
+- `scripts/stream_test.py` — тестирует `--output-format stream-json` на стриминг event-by-event. Подтвердило что CLI не стримит токены.
+- `scripts/openrouter_test.py` — пробный SSE-стрим через OpenRouter (нужен `OPENROUTER_API_KEY`, в проде не настроен).
 
 ## Известные проблемы / нюансы
 
 - **Re-индексация на CPU долгая** (~3 часа на ~9к чанков). E5 на CPU = bottleneck. На GPU будет быстрее.
-- **TelegramConflictError** при повторном запуске — убить старый процесс `pgrep -f main_bot.py` → `kill <pid>`.
+- **TelegramConflictError** при повторном запуске — убить старый процесс `pgrep -f main_bot.py` → `kill <pid>`. В Docker — `docker compose restart bot`.
 - **`start_admin.sh` использует порт 8001** — не 8000. Vue dev-сервер ждёт API на 8001.
 - **SQLite + параллельные воркеры** — все DB-записи через общий `threading.Lock` в `_eval_one`.
 - **Контекстуализация PDF-чанков** — текущий `contextualized_text` содержит имя продукта, но boilerplate всё равно ловится dedup'ом, т.к. косинус повторяющегося абзаца в разных префиксах остаётся выше 0.92.
+- **Streaming UX** — фейковый, ждём перехода на API mode для реальных deltas. См. секцию Claude CLI auth выше.
+- **Cross-container slot pool в Docker** — `bot` и `admin` это РАЗНЫЕ контейнеры с разным `/tmp`, поэтому slot pool каждый сам себе. До 8 одновременных CLI subprocess под нагрузкой. Фикс — общий named volume на `/tmp/teplodar_claude_slots` в `docker-compose.yml`. Не сделано пока трафик не вырос.
 
-## Что осталось сделать
+## Что осталось / возможные дальнейшие правки
 
-- Прогнать eval run 3 после рефакторинга и сравнить с runs 1 и 2 в админке (`/eval`)
-- Проверить вопрос «хочу отопительную печь для дачи небольшой» — был плохой score из-за boilerplate-доминирования; должно стать лучше.
+- Cross-container slot pool (общий volume в `docker-compose.yml`) — когда трафик вырастет.
+- INTENT_PROMPT_TPL сейчас ~2078 токенов. Можно сжать до ~1200 → -1-2с на Haiku. Нужен eval-run чтобы убедиться что классификация не упала.
+- LRU кеш intent-результатов (hash(query) → Intent). Повторяющиеся вопросы (FAQ-like) отдавали бы intent мгновенно, -10-15с.
+- Если перейдём на API/OpenRouter — `mode="api"` skeleton уже есть, можно подключить prompt caching на статичный префикс (system+FAQ), ~−3-5с на cache hit.
