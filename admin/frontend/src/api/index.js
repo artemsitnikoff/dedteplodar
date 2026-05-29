@@ -123,6 +123,55 @@ export const api = {
   getEvalAnswer: (runId, questionId) => client.get(`/eval/runs/${runId}/results/${questionId}/answer`),
   compareEvalRuns: (id_a, id_b) => client.get(`/eval/runs/${id_a}/compare/${id_b}`),
   deleteEvalRun: (id) => client.delete(`/eval/runs/${id}`),
+
+  // Chat (web consultant)
+  sendChatFeedback: (payload) => client.post('/chat/feedback', payload),
+}
+
+// Streaming chat — native fetch + ReadableStream. axios doesn't surface a
+// streaming body in the browser, and we need a POST body (so EventSource is
+// out). Same-origin request → the browser attaches the cached basic-auth
+// credentials automatically. Callbacks: onPhase(name), onDone(event),
+// onError(err). Pass an AbortSignal to cancel.
+export async function sendChatStream({ message, session_id, history }, { onPhase, onDone, onError, signal } = {}) {
+  try {
+    const resp = await fetch('/api/v1/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id, history }),
+      signal,
+    })
+    if (!resp.ok || !resp.body) {
+      onError?.(new Error(`HTTP ${resp.status}`))
+      return
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // SSE frames are separated by a blank line.
+      let sep
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + 2)
+        const dataLine = frame.split('\n').find((l) => l.startsWith('data:'))
+        if (!dataLine) continue
+        const payload = dataLine.slice(5).trim()
+        if (!payload) continue
+        let ev
+        try { ev = JSON.parse(payload) } catch { continue }
+        if (ev.type === 'phase') onPhase?.(ev.phase)
+        else if (ev.type === 'done') onDone?.(ev)
+        else if (ev.type === 'error') onError?.(new Error(ev.message || 'stream error'), ev)
+      }
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return
+    onError?.(e)
+  }
 }
 
 export default client

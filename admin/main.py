@@ -1,5 +1,7 @@
 """FastAPI admin application for Teplodar RAG knowledge base."""
+import asyncio
 import base64
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -10,7 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router, synonyms as synonyms_router
+from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router, synonyms as synonyms_router, chat as chat_router
+
+logger = logging.getLogger(__name__)
 
 # ── HTTP Basic auth on every request (except static assets and health) ───────────────────
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
@@ -37,7 +41,24 @@ async def lifespan(app: FastAPI):
     from src.core.migrations import assert_schema_ready
     assert_schema_ready(expected=["query_logs", "eval"])
 
+    # Warm up the RAG generator in the background so the first web-chat
+    # request doesn't pay the ~30s E5 + index load. Non-blocking: startup
+    # stays fast and the singleton is ready shortly after. This is the same
+    # singleton the eval runner uses (eval_service.get_eval_generator).
+    from admin.services.eval_service import get_eval_generator
+
+    async def _warm_up_generator():
+        try:
+            await get_eval_generator()
+            logger.info("[chat] RAG generator warmed up — chat ready.")
+        except Exception:
+            logger.exception("[chat] generator warm-up failed (will retry lazily)")
+
+    warm_task = asyncio.create_task(_warm_up_generator())
+
     yield
+
+    warm_task.cancel()
 
 
 app = FastAPI(
@@ -103,6 +124,7 @@ app.include_router(query_logs.router, prefix="/api/v1")
 app.include_router(faq_entries.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
 app.include_router(synonyms_router.router, prefix="/api/v1")
+app.include_router(chat_router.router, prefix="/api/v1")
 
 
 @app.get("/health")

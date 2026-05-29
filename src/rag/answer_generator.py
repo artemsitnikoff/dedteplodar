@@ -594,6 +594,8 @@ class AnswerGenerator:
         query: str,
         user_id: int | None = None,
         on_chunk=None,
+        history: list[dict] | None = None,
+        on_phase=None,
     ) -> tuple[str, AnswerMeta]:
         """Return (answer_text, metadata).
 
@@ -605,6 +607,16 @@ class AnswerGenerator:
           3. If intent.faq_match_id → return that FAQ answer.
           4. Otherwise route by intent.intent to the right handler.
           5. Fallback to legacy regex/cosine pipeline if Haiku fails.
+
+        `history` (web chat) — if provided (even []), it is used verbatim and
+        the per-user DB lookup is skipped; the web client already holds the
+        thread, so there's no 30-minute window. `None` keeps the Telegram
+        behaviour (pull from query_logs by user_id).
+
+        `on_phase(name)` — optional progress callback fired at phase
+        boundaries ("intent" | "retrieval" | "answer") so a streaming caller
+        can show what the pipeline is doing while Claude CLI (which doesn't
+        stream tokens) produces the answer in one block.
         """
         from .intent_extractor import extract_intent
         from src.logs.queries import get_recent_dialog
@@ -612,10 +624,13 @@ class AnswerGenerator:
         t0 = time.monotonic()
 
         t_history_start = time.monotonic()
-        history = get_recent_dialog(user_id) if user_id else []
+        if history is None:
+            history = get_recent_dialog(user_id) if user_id else []
         t_history_ms = int((time.monotonic() - t_history_start) * 1000)
 
         faq_entries = self.faq_matcher._entries if self.faq_matcher else []
+        if on_phase:
+            on_phase("intent")
         t_intent_start = time.monotonic()
         intent = extract_intent(
             query,
@@ -647,6 +662,8 @@ class AnswerGenerator:
         if intent.intent == "FAQ_DEALER":
             answer, meta = self._handle_dealer_meta(query, city_hint=intent.city)
         elif intent.intent == "FAQ_COMPANY":
+            if on_phase:
+                on_phase("answer")
             t_ans_start = time.monotonic()
             answer = self._stream_collect(
                 self._call_claude(query, chunks=[], history=history),
@@ -657,7 +674,8 @@ class AnswerGenerator:
             meta.t_answer_model = self._answer_model_label()
         else:
             answer, meta = self._handle_rag_meta(
-                session, query, intent=intent, history=history, on_chunk=on_chunk,
+                session, query, intent=intent, history=history,
+                on_chunk=on_chunk, on_phase=on_phase,
             )
 
         meta.t_history_ms = t_history_ms
@@ -732,7 +750,9 @@ class AnswerGenerator:
                     logger.warning("on_chunk callback failed: %s", cb_exc)
         return _md_to_html("".join(parts))
 
-    def _handle_rag_meta(self, session: Session, query: str, intent=None, history=None, on_chunk=None) -> tuple[str, AnswerMeta]:
+    def _handle_rag_meta(self, session: Session, query: str, intent=None, history=None, on_chunk=None, on_phase=None) -> tuple[str, AnswerMeta]:
+        if on_phase:
+            on_phase("retrieval")
         t_ret_start = time.monotonic()
         # Use the LLM-reformulated query if intent extractor produced one,
         # otherwise call the legacy reformulator (used by the fallback path).
@@ -817,6 +837,8 @@ class AnswerGenerator:
             t_retrieval_ms=t_retrieval_ms,
         )
         # Answer uses the original query so the LLM sees natural language
+        if on_phase:
+            on_phase("answer")
         t_ans_start = time.monotonic()
         answer = self._stream_collect(
             self._call_claude(query, chunks=results, dealer_block=dealer_block, history=history),

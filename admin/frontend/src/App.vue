@@ -1,6 +1,11 @@
 <script setup>
-import { ref, provide } from 'vue'
+import { ref, provide, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
+
+const route = useRoute()
+// Chat ('/') runs without the admin sidebar/topbar; admin routes keep AppShell.
+const isChat = computed(() => route.meta.layout === 'chat')
 
 // Toast notifications
 const toasts = ref([])
@@ -18,8 +23,9 @@ provide('toast', showToast)
 </script>
 
 <template>
-  <div class="app">
-    <AppShell />
+  <div :class="isChat ? 'app-chat' : 'app'">
+    <AppShell v-if="!isChat" />
+    <RouterView v-else />
 
     <!-- Toast notifications -->
     <div class="toast-container">
@@ -63,6 +69,16 @@ body {
   background: var(--bg-app);
   color: var(--fg-1);
   min-width: 1180px;
+}
+
+/* Chat layout — full height, no admin grid, no desktop min-width so it
+   works on a phone (experts may open it on mobile). */
+.app-chat {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  color: var(--fg-1);
 }
 
 /* Toast notifications */
