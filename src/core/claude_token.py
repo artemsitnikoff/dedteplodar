@@ -19,6 +19,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 TOKEN_FILE = Path("data/.claude_token.json")
+# Claude CLI reads auth from here on direct invocation. Setting only the
+# CLAUDE_CODE_OAUTH_TOKEN env var is NOT enough — the CLI reports
+# "Not logged in" and exits 1. Mirror the token into this native store.
+CLI_CREDENTIALS_FILE = Path.home() / ".claude" / "credentials.json"
 TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REFRESH_BUFFER_MS = 600_000  # refresh 10 min before expiry
@@ -50,6 +54,32 @@ def _save(data: dict) -> None:
     tmp = TOKEN_FILE.with_suffix(TOKEN_FILE.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2))
     os.replace(tmp, TOKEN_FILE)
+    _sync_cli_credentials(data)
+
+
+def _sync_cli_credentials(data: dict) -> None:
+    """Mirror tokens into ~/.claude/credentials.json — the Claude CLI reads
+    auth from here. The CLAUDE_CODE_OAUTH_TOKEN env var alone is not enough
+    (CLI reports "Not logged in" / exits 1). Format: nested claudeAiOauth.
+    Mirrors ArkadiyJarvis's working pattern (shared data/.claude_token.json).
+    """
+    if not data.get("access_token"):
+        return
+    try:
+        CLI_CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "claudeAiOauth": {
+                "accessToken": data.get("access_token", ""),
+                "refreshToken": data.get("refresh_token", ""),
+                "expiresAt": int(data.get("expires_at", 0)),
+                "scopes": ["user:inference", "user:profile"],
+            },
+        }
+        tmp = CLI_CREDENTIALS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, CLI_CREDENTIALS_FILE)
+    except Exception as e:
+        logger.warning("Could not write %s: %s", CLI_CREDENTIALS_FILE, e)
 
 
 def init_token_file() -> None:
@@ -118,13 +148,18 @@ def ensure_fresh_token_sync() -> None:
         if data.get("expires_at", 0) > now_ms + REFRESH_BUFFER_MS:
             if data.get("access_token"):
                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+                # Usual path here: the token was refreshed by another service
+                # sharing data/.claude_token.json, so _do_refresh/_save isn't
+                # hit — sync the CLI credential store ourselves.
+                _sync_cli_credentials(data)
             return
 
-        new_data = _do_refresh(data)
+        new_data = _do_refresh(data)  # _save() inside also syncs CLI creds
         if new_data:
             os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = new_data["access_token"]
         elif data.get("access_token"):
             os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+            _sync_cli_credentials(data)
 
 
 async def ensure_fresh_token() -> None:
@@ -136,10 +171,12 @@ async def ensure_fresh_token() -> None:
         if data.get("expires_at", 0) > now_ms + REFRESH_BUFFER_MS:
             if data.get("access_token"):
                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+                _sync_cli_credentials(data)
             return
 
-        new_data = await asyncio.to_thread(_do_refresh, data)
+        new_data = await asyncio.to_thread(_do_refresh, data)  # _save() syncs CLI creds
         if new_data:
             os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = new_data["access_token"]
         elif data.get("access_token"):
             os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+            _sync_cli_credentials(data)
