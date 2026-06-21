@@ -69,6 +69,7 @@ def _init_generator_sync():
         retriever=retriever,
         mode="cli",
         cli_path=settings.claude_cli_path,
+        model=settings.claude_model,                              # final answer (Sonnet 4.6)
         reformulation_model=settings.claude_reformulation_model,
         faq_matcher=faq_matcher,
     )

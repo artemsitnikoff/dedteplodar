@@ -551,7 +551,7 @@ class AnswerGenerator:
         retriever: HybridRetriever,
         mode: str = "cli",
         cli_path: str = "claude",
-        model: str = "claude-sonnet-4-5",
+        model: str = "claude-sonnet-4-6",
         reformulation_model: str = "claude-haiku-4-5-20251001",
         top_k: int = 5,
         faq_matcher=None,
