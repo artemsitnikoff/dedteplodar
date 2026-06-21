@@ -4,6 +4,12 @@ services:
     command: python main_bot.py
     env_file:
       - .env
+    environment:
+      # E5 model is static and already lives in the hf_cache volume — load it
+      # from cache, never call huggingface.co. A DNS/HF outage must not break
+      # model load (see the admin generator-init failure that broke web chat).
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
     volumes:
       - ./base:/app/base          # knowledge base: DB, embeddings, PDFs, FAQ
       - ./data:/app/data          # shared with ArkadiyJarvis: .claude_token.json
@@ -17,6 +23,12 @@ services:
       - "8001:8001"
     env_file:
       - .env
+    environment:
+      # Same as bot: load E5 from the hf_cache volume offline so an HF/DNS
+      # outage can't break the generator warm-up (this was the web-chat
+      # "Извините, не удалось получить ответ" / 502 root cause).
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
     volumes:
       - ./base:/app/base
       - ./data:/app/data
