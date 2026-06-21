@@ -143,44 +143,31 @@ def ensure_fresh_token_sync() -> None:
     """Refresh token if needed. Thread-safe, blocking. Use in sync/subprocess context."""
     with _sync_lock:
         data = _load()
-        now_ms = time.time() * 1000
 
-        # CONSUMER-FIRST. teplodar shares data/.claude_token.json with
-        # ArkadiyJarvis (symlink); Jarvis OWNS the refresh. Anthropic refresh
-        # tokens are single-use, so refreshing here races Jarvis and 400s
-        # (invalid_grant), breaking auth for both. So if the shared token is
-        # still valid, just use it — never refresh proactively. Only refresh
-        # as a last resort if it's genuinely expired (Jarvis down/standalone).
-        if data.get("access_token") and data.get("expires_at", 0) > now_ms:
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+        # PURE CONSUMER — teplodar must NEVER refresh. It shares
+        # data/.claude_token.json with ArkadiyJarvis via a symlink, and Jarvis
+        # OWNS the refresh. Anthropic refresh tokens are single-use, so a
+        # refresh here races Jarvis (400 invalid_grant) or rotates the token
+        # out from under it. Just use whatever access token Jarvis last wrote;
+        # if it's stale, Jarvis re-seeds it and we pick it up next call.
+        access = data.get("access_token")
+        if access:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = access
             _sync_cli_credentials(data)
-            return
-
-        new_data = _do_refresh(data)  # _save() inside also syncs CLI creds
-        if new_data:
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = new_data["access_token"]
-        elif data.get("access_token"):
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
-            _sync_cli_credentials(data)
+        else:
+            logger.error("No access_token in %s — ArkadiyJarvis seeds it", TOKEN_FILE)
 
 
 async def ensure_fresh_token() -> None:
     """Async variant — use from async context."""
     async with _get_async_lock():
         data = _load()
-        now_ms = time.time() * 1000
 
-        # Consumer-first — see ensure_fresh_token_sync. Don't refresh the
-        # shared (Jarvis-owned) token proactively; only as a last resort if
-        # it is genuinely expired.
-        if data.get("access_token") and data.get("expires_at", 0) > now_ms:
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+        # Pure consumer — see ensure_fresh_token_sync. teplodar never refreshes
+        # the shared (Jarvis-owned) token; it only reads and uses it.
+        access = data.get("access_token")
+        if access:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = access
             _sync_cli_credentials(data)
-            return
-
-        new_data = await asyncio.to_thread(_do_refresh, data)  # _save() syncs CLI creds
-        if new_data:
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = new_data["access_token"]
-        elif data.get("access_token"):
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
-            _sync_cli_credentials(data)
+        else:
+            logger.error("No access_token in %s — ArkadiyJarvis seeds it", TOKEN_FILE)
