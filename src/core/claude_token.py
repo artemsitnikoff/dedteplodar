@@ -145,13 +145,15 @@ def ensure_fresh_token_sync() -> None:
         data = _load()
         now_ms = time.time() * 1000
 
-        if data.get("expires_at", 0) > now_ms + REFRESH_BUFFER_MS:
-            if data.get("access_token"):
-                os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
-                # Usual path here: the token was refreshed by another service
-                # sharing data/.claude_token.json, so _do_refresh/_save isn't
-                # hit — sync the CLI credential store ourselves.
-                _sync_cli_credentials(data)
+        # CONSUMER-FIRST. teplodar shares data/.claude_token.json with
+        # ArkadiyJarvis (symlink); Jarvis OWNS the refresh. Anthropic refresh
+        # tokens are single-use, so refreshing here races Jarvis and 400s
+        # (invalid_grant), breaking auth for both. So if the shared token is
+        # still valid, just use it — never refresh proactively. Only refresh
+        # as a last resort if it's genuinely expired (Jarvis down/standalone).
+        if data.get("access_token") and data.get("expires_at", 0) > now_ms:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+            _sync_cli_credentials(data)
             return
 
         new_data = _do_refresh(data)  # _save() inside also syncs CLI creds
@@ -168,10 +170,12 @@ async def ensure_fresh_token() -> None:
         data = _load()
         now_ms = time.time() * 1000
 
-        if data.get("expires_at", 0) > now_ms + REFRESH_BUFFER_MS:
-            if data.get("access_token"):
-                os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
-                _sync_cli_credentials(data)
+        # Consumer-first — see ensure_fresh_token_sync. Don't refresh the
+        # shared (Jarvis-owned) token proactively; only as a last resort if
+        # it is genuinely expired.
+        if data.get("access_token") and data.get("expires_at", 0) > now_ms:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = data["access_token"]
+            _sync_cli_credentials(data)
             return
 
         new_data = await asyncio.to_thread(_do_refresh, data)  # _save() syncs CLI creds
