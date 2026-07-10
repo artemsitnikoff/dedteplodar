@@ -45,14 +45,6 @@ FAQ:
 
 Верни ТОЛЬКО номер записи (например "3") или слово NONE. Ничего больше, без объяснений."""
 
-_DISALLOWED_TOOLS = (
-    "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,NotebookEdit,"
-    "Glob,Grep,"
-    "WebFetch,WebSearch,"
-    "Task,Agent,TodoWrite,ExitPlanMode"
-)
-
 
 @dataclass
 class FaqMatch:
@@ -113,7 +105,7 @@ class FaqMatcher:
         args = [
             self.cli_path, "--print", "--output-format", "text",
             "--no-session-persistence",
-            "--disallowed-tools", _DISALLOWED_TOOLS,
+            "--tools", "",
         ]
         if self.llm_model:
             args += ["--model", self.llm_model]

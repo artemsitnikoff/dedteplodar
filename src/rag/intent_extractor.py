@@ -28,14 +28,6 @@ logger = logging.getLogger(__name__)
 
 LLM_TIMEOUT = 25  # seconds
 
-_DISALLOWED_TOOLS = (
-    "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,NotebookEdit,"
-    "Glob,Grep,"
-    "WebFetch,WebSearch,"
-    "Task,Agent,TodoWrite,ExitPlanMode"
-)
-
 
 @dataclass
 class Intent:
@@ -193,7 +185,7 @@ def extract_intent(
     args = [
         cli_path, "--print", "--output-format", "text",
         "--no-session-persistence",
-        "--disallowed-tools", _DISALLOWED_TOOLS,
+        "--tools", "",
     ]
     if model:
         args += ["--model", model]

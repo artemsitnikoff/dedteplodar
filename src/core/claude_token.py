@@ -19,13 +19,46 @@ import httpx
 logger = logging.getLogger(__name__)
 
 TOKEN_FILE = Path("data/.claude_token.json")
-# Claude CLI reads auth from here on direct invocation. Setting only the
-# CLAUDE_CODE_OAUTH_TOKEN env var is NOT enough — the CLI reports
-# "Not logged in" and exits 1. Mirror the token into this native store.
+# Fallback mirror of the CLI's native credential store, used only by the
+# LEGACY refresh-mode path below. NOT needed for a long-lived `claude
+# setup-token` token — that authenticates from the CLAUDE_CODE_OAUTH_TOKEN
+# env var alone (glafiraeuro proves it; the CLI reads that env var first).
 CLI_CREDENTIALS_FILE = Path.home() / ".claude" / "credentials.json"
 TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REFRESH_BUFFER_MS = 600_000  # refresh 10 min before expiry
+
+# A setup-token OAuth token is long-lived (~1y) but carries no expiry we can
+# read from the env. The CLI rejects a credentials.json whose expiresAt is in
+# the past ("Not logged in · Please run /login"), so when we mirror we must
+# never write a stale stamp: clamp any 0/past value to ~1y ahead and let the
+# server enforce the real expiry (a genuine 401 only if the token truly died).
+_ONE_YEAR_MS = 365 * 24 * 3600 * 1000
+
+
+def _safe_expires_at(raw) -> int:
+    try:
+        exp = int(raw)
+    except (TypeError, ValueError):
+        exp = 0
+    now_ms = int(time.time() * 1000)
+    return exp if exp > now_ms + 60_000 else now_ms + _ONE_YEAR_MS
+
+
+def _static_token() -> str | None:
+    """A long-lived env token to use directly (glafiraeuro-style), or None.
+
+    `claude setup-token` yields a long-lived `sk-ant-oat01-…` token that needs
+    no refresh — use it straight from the env and IGNORE the shared token file,
+    so a neighbour project (ArkadiyJarvis) rotating data/.claude_token.json can
+    never lock us out. Any env token with no refresh token is treated as static.
+    """
+    tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not tok:
+        return None
+    if tok.startswith("sk-ant-oat01") or not os.environ.get("CLAUDE_REFRESH_TOKEN", "").strip():
+        return tok
+    return None
 
 # Sync lock for blocking callers (subprocess path)
 _sync_lock = threading.Lock()
@@ -71,7 +104,7 @@ def _sync_cli_credentials(data: dict) -> None:
             "claudeAiOauth": {
                 "accessToken": data.get("access_token", ""),
                 "refreshToken": data.get("refresh_token", ""),
-                "expiresAt": int(data.get("expires_at", 0)),
+                "expiresAt": _safe_expires_at(data.get("expires_at", 0)),
                 "scopes": ["user:inference", "user:profile"],
             },
         }
@@ -140,34 +173,51 @@ def _do_refresh(data: dict) -> dict | None:
 
 
 def ensure_fresh_token_sync() -> None:
-    """Refresh token if needed. Thread-safe, blocking. Use in sync/subprocess context."""
+    """Make sure the Claude CLI can authenticate. Thread-safe, blocking.
+
+    STATIC mode (recommended): a long-lived CLAUDE_CODE_OAUTH_TOKEN from
+    `claude setup-token`, no refresh token. Used straight from the env like
+    glafiraeuro — the shared token file is never touched, so a neighbour
+    project rotating it can't lock us out.
+
+    LEGACY mode: consume the access token ArkadiyJarvis last wrote to the
+    shared file. teplodar never refreshes it (single-use tokens race Jarvis).
+    """
+    tok = _static_token()
+    if tok:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = tok  # re-assert for the subprocess env
+        _sync_cli_credentials({"access_token": tok})  # mirror w/ safe future expiry
+        return
+
     with _sync_lock:
         data = _load()
-
-        # PURE CONSUMER — teplodar must NEVER refresh. It shares
-        # data/.claude_token.json with ArkadiyJarvis via a symlink, and Jarvis
-        # OWNS the refresh. Anthropic refresh tokens are single-use, so a
-        # refresh here races Jarvis (400 invalid_grant) or rotates the token
-        # out from under it. Just use whatever access token Jarvis last wrote;
-        # if it's stale, Jarvis re-seeds it and we pick it up next call.
         access = data.get("access_token")
         if access:
             os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = access
             _sync_cli_credentials(data)
         else:
-            logger.error("No access_token in %s — ArkadiyJarvis seeds it", TOKEN_FILE)
+            logger.error(
+                "No CLAUDE_CODE_OAUTH_TOKEN and no access_token in %s — "
+                "set a long-lived token from `claude setup-token`", TOKEN_FILE,
+            )
 
 
 async def ensure_fresh_token() -> None:
-    """Async variant — use from async context."""
+    """Async variant — see ensure_fresh_token_sync."""
+    tok = _static_token()
+    if tok:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = tok
+        _sync_cli_credentials({"access_token": tok})
+        return
+
     async with _get_async_lock():
         data = _load()
-
-        # Pure consumer — see ensure_fresh_token_sync. teplodar never refreshes
-        # the shared (Jarvis-owned) token; it only reads and uses it.
         access = data.get("access_token")
         if access:
             os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = access
             _sync_cli_credentials(data)
         else:
-            logger.error("No access_token in %s — ArkadiyJarvis seeds it", TOKEN_FILE)
+            logger.error(
+                "No CLAUDE_CODE_OAUTH_TOKEN and no access_token in %s — "
+                "set a long-lived token from `claude setup-token`", TOKEN_FILE,
+            )

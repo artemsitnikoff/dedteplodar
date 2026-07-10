@@ -366,15 +366,6 @@ def _build_full_prompt(
     return "\n".join(parts)
 
 
-_DISALLOWED_TOOLS = (
-    "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,NotebookEdit,"
-    "Glob,Grep,"
-    "WebFetch,WebSearch,"
-    "Task,Agent,TodoWrite,ExitPlanMode"
-)
-
-
 def _call_cli_stream(
     prompt: str,
     cli_path: str = "claude",
@@ -403,7 +394,7 @@ def _call_cli_stream(
         "--print",
         "--output-format", "text",
         "--no-session-persistence",
-        "--disallowed-tools", _DISALLOWED_TOOLS,
+        "--tools", "",
     ]
     if model:
         args += ["--model", model]
@@ -509,7 +500,7 @@ def _call_cli(prompt: str, cli_path: str = "claude", model: str = "") -> str:
         "--print",
         "--output-format", "text",
         "--no-session-persistence",
-        "--disallowed-tools", _DISALLOWED_TOOLS,
+        "--tools", "",
     ]
     if model:
         args += ["--model", model]

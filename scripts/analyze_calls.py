@@ -55,13 +55,6 @@ MIN_TURNS = 4           # each side must speak at least twice
 WORKERS = 2             # parallel CLI subprocesses (each pegs a core ~30s)
 LLM_TIMEOUT = 120       # one Opus call
 
-_DISALLOWED_TOOLS = (
-    "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,NotebookEdit,"
-    "Glob,Grep,WebFetch,WebSearch,"
-    "Task,Agent,TodoWrite,ExitPlanMode"
-)
-
 
 # ────────────────────────────────────────────────────────────────── data classes
 
@@ -253,7 +246,7 @@ def classify_one(conv: Conversation, cli_path: str, model: str) -> dict:
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
     args = [cli_path, "--print", "--output-format", "text",
             "--no-session-persistence",
-            "--disallowed-tools", _DISALLOWED_TOOLS]
+            "--tools", ""]
     if model:
         args += ["--model", model]
 
@@ -366,7 +359,7 @@ def aggregate(classified: list[dict], cli_path: str, model: str) -> dict:
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
     args = [cli_path, "--print", "--output-format", "text",
             "--no-session-persistence",
-            "--disallowed-tools", _DISALLOWED_TOOLS]
+            "--tools", ""]
     if model:
         args += ["--model", model]
 

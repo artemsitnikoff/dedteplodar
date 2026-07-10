@@ -23,12 +23,6 @@ logger = logging.getLogger(__name__)
 
 LLM_TIMEOUT = 30  # seconds — judge call
 
-_DISALLOWED_TOOLS = (
-    "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,NotebookEdit,"
-    "Glob,Grep,WebFetch,WebSearch,"
-    "Task,Agent,TodoWrite,ExitPlanMode"
-)
 
 _PROMPT = """Ты — асессор ответов AI-консультанта компании «Теплодар» (печи, котлы, камины).
 Оцени, насколько ответ бота ПОЛЕЗЕН для клиента — то есть содержит ли он информацию,
@@ -79,7 +73,7 @@ def judge_answer(
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
     args = [cli_path, "--print", "--output-format", "text",
             "--no-session-persistence",
-            "--disallowed-tools", _DISALLOWED_TOOLS]
+            "--tools", ""]
     if model:
         args += ["--model", model]
 

@@ -27,15 +27,6 @@ _PROMPT_TEMPLATE = """\
 Поисковый запрос:"""
 
 
-_DISALLOWED_TOOLS = (
-    "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,NotebookEdit,"
-    "Glob,Grep,"
-    "WebFetch,WebSearch,"
-    "Task,Agent,TodoWrite,ExitPlanMode"
-)
-
-
 def reformulate(query: str, cli_path: str = "claude", model: str = "") -> str:
     """Return a retrieval-optimised version of the query via Claude CLI.
 
@@ -54,7 +45,7 @@ def reformulate(query: str, cli_path: str = "claude", model: str = "") -> str:
     args = [
         cli_path, "--print", "--output-format", "text",
         "--no-session-persistence",
-        "--disallowed-tools", _DISALLOWED_TOOLS,
+        "--tools", "",
     ]
     if model:
         args += ["--model", model]
