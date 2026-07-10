@@ -25,9 +25,9 @@ LLM_TIMEOUT = 30  # seconds — judge call
 
 _DISALLOWED_TOOLS = (
     "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,MultiEdit,NotebookEdit,"
+    "Read,Write,Edit,NotebookEdit,"
     "Glob,Grep,WebFetch,WebSearch,"
-    "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
+    "Task,Agent,TodoWrite,ExitPlanMode"
 )
 
 _PROMPT = """Ты — асессор ответов AI-консультанта компании «Теплодар» (печи, котлы, камины).

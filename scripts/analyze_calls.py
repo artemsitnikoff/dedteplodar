@@ -57,9 +57,9 @@ LLM_TIMEOUT = 120       # one Opus call
 
 _DISALLOWED_TOOLS = (
     "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,MultiEdit,NotebookEdit,"
+    "Read,Write,Edit,NotebookEdit,"
     "Glob,Grep,WebFetch,WebSearch,"
-    "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
+    "Task,Agent,TodoWrite,ExitPlanMode"
 )
 
 

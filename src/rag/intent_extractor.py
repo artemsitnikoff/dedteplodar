@@ -30,10 +30,10 @@ LLM_TIMEOUT = 25  # seconds
 
 _DISALLOWED_TOOLS = (
     "Bash,BashOutput,KillShell,"
-    "Read,Write,Edit,MultiEdit,NotebookEdit,"
+    "Read,Write,Edit,NotebookEdit,"
     "Glob,Grep,"
     "WebFetch,WebSearch,"
-    "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
+    "Task,Agent,TodoWrite,ExitPlanMode"
 )
 
 
