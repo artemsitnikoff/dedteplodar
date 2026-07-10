@@ -180,6 +180,47 @@ def _expand_kw_range(query: str) -> list[str]:
     ]
 
 
+_COMPARISON_FRAME_RE = re.compile(
+    r"\b(и|vs|versus|или|против|между|чем|от|отлич\w*|сравн\w*|разниц\w*|лучше)\b",
+    re.IGNORECASE,
+)
+
+
+def _target_strip_re(t: str) -> str:
+    """Regex for a target name that also catches Russian declension endings.
+
+    "Сахара" must strip "Сахары"/"Сахаре" too (genitive/etc.), or the competing
+    name survives in the per-target query. Model codes with digits/hyphens
+    ("Куппер-12") don't decline — match them verbatim.
+    """
+    t = t.strip()
+    if re.search(r"[\d\-\s]", t):          # "Куппер-12", "Куппер ОВК 9" — no declension
+        return re.escape(t) + r"\w*"
+    if len(t) >= 4:                        # single word — match stem + any ending
+        return re.escape(t[:-1]) + r"\w*"
+    return re.escape(t) + r"\w*"
+
+
+def _strip_comparison_frame(query: str, targets: list[str]) -> str:
+    """Strip the compared product names + comparison connectors from a query.
+
+    A comparison query ("чем Русь отличается от Сахары") names BOTH products,
+    so a per-target retrieval built as f"{target} {query}" stays polluted by the
+    competing name and the higher-scoring family drowns the other out (measured:
+    Русь pages = 0 in the top-12 for "Сравнение печей Русь и Сахара…"). Removing
+    every target name (incl. declensions) and the comparison words leaves a
+    neutral frame ("печей характеристики") that we then prefix with a single
+    target, so each family is retrieved on its own merits (measured: 6 Русь +
+    6 Сахара pages).
+    """
+    out = query
+    for t in sorted(targets, key=len, reverse=True):
+        if t.strip():
+            out = re.sub(_target_strip_re(t), " ", out, flags=re.IGNORECASE)
+    out = _COMPARISON_FRAME_RE.sub(" ", out)
+    return re.sub(r"\s+", " ", out).strip()
+
+
 def _dedup_by_product(results: list[SearchResult], limit: int | None = None) -> list[SearchResult]:
     """Keep best-scoring chunk per product_id; preserve non-product chunks as-is."""
     seen: dict[int, SearchResult] = {}
@@ -771,8 +812,11 @@ class AnswerGenerator:
             all_results: list[SearchResult] = []
             per_k = max(k, 6)
             seen_ids: set[int] = set()
+            # Neutral frame with every compared name + comparison words removed,
+            # so each per-target search isn't dominated by the other family.
+            frame = _strip_comparison_frame(retrieval_query, comparison_targets)
             for target in comparison_targets:
-                target_query = f"{target} {retrieval_query}"
+                target_query = f"{target} {frame}".strip()
                 for r in self.retriever.search(session, target_query, k=per_k):
                     if r.id not in seen_ids:
                         seen_ids.add(r.id)
