@@ -77,3 +77,5 @@ teplodarbot.egg-info/
 
 # Yandex YML import (large, regenerated)
 yandex_yml_base.xml
+# generated diagram PDF (rebuild via docs/build_pdf.sh)
+docs/*.pdf

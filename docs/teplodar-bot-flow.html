@@ -1,0 +1,371 @@
+<title>Схема работы бота Teplodar</title>
+<style>
+  /* ---------- palette: raw values defined once, aliased per theme ---------- */
+  :root {
+    --l-bg:#F6F4F1; --l-surface:#FFFFFF; --l-surface2:#FBF9F7; --l-border:#E8E1DA;
+    --l-ink:#211C18; --l-ink2:#5C544D; --l-ink3:#938A82;
+    --l-ember:#DA5127; --l-steel:#22708F; --l-slate:#5F6773; --l-leaf:#43895F;
+    --l-glow:rgba(218,81,39,.22);
+
+    --d-bg:#15110E; --d-surface:#1E1915; --d-surface2:#241E19; --d-border:#352C25;
+    --d-ink:#F1EBE5; --d-ink2:#B6ACA3; --d-ink3:#867C73;
+    --d-ember:#F26B3E; --d-steel:#57A9CA; --d-slate:#98A1AE; --d-leaf:#6FBE8C;
+    --d-glow:rgba(242,107,62,.30);
+
+    /* active tokens (light default) */
+    --bg:var(--l-bg); --surface:var(--l-surface); --surface2:var(--l-surface2); --border:var(--l-border);
+    --ink:var(--l-ink); --ink2:var(--l-ink2); --ink3:var(--l-ink3);
+    --ember:var(--l-ember); --steel:var(--l-steel); --slate:var(--l-slate); --leaf:var(--l-leaf);
+    --glow:var(--l-glow);
+
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Menlo",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    --radius:12px;
+    --maxw:1120px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:var(--d-bg); --surface:var(--d-surface); --surface2:var(--d-surface2); --border:var(--d-border);
+      --ink:var(--d-ink); --ink2:var(--d-ink2); --ink3:var(--d-ink3);
+      --ember:var(--d-ember); --steel:var(--d-steel); --slate:var(--d-slate); --leaf:var(--d-leaf);
+      --glow:var(--d-glow);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:var(--l-bg); --surface:var(--l-surface); --surface2:var(--l-surface2); --border:var(--l-border);
+    --ink:var(--l-ink); --ink2:var(--l-ink2); --ink3:var(--l-ink3);
+    --ember:var(--l-ember); --steel:var(--l-steel); --slate:var(--l-slate); --leaf:var(--l-leaf);
+    --glow:var(--l-glow);
+  }
+  :root[data-theme="dark"] {
+    --bg:var(--d-bg); --surface:var(--d-surface); --surface2:var(--d-surface2); --border:var(--d-border);
+    --ink:var(--d-ink); --ink2:var(--d-ink2); --ink3:var(--d-ink3);
+    --ember:var(--d-ember); --steel:var(--d-steel); --slate:var(--d-slate); --leaf:var(--d-leaf);
+    --glow:var(--d-glow);
+  }
+
+  * { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(120% 60% at 50% -8%, var(--glow), transparent 60%);
+    background-repeat:no-repeat;
+  }
+  .wrap { max-width:var(--maxw); margin:0 auto; padding:40px 22px 72px; }
+
+  /* ---------- header ---------- */
+  .eyebrow {
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--ember); margin:0 0 12px; display:flex; align-items:center; gap:9px;
+  }
+  .eyebrow::before { content:""; width:22px; height:2px; background:var(--ember); display:inline-block; }
+  h1 {
+    font-size:clamp(28px,4.4vw,40px); line-height:1.08; letter-spacing:-.02em; font-weight:680;
+    margin:0 0 12px; text-wrap:balance; max-width:20ch;
+  }
+  .lede { font-size:16px; color:var(--ink2); margin:0; max-width:60ch; }
+
+  /* ---------- legend ---------- */
+  .legend { display:flex; flex-wrap:wrap; gap:8px 16px; margin:26px 0 6px; }
+  .lk { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; color:var(--ink2); font-family:var(--mono); }
+  .dot { width:10px; height:10px; border-radius:3px; flex:none; }
+  .dot.ember{background:var(--ember);} .dot.steel{background:var(--steel);}
+  .dot.slate{background:var(--slate);} .dot.leaf{background:var(--leaf);}
+
+  /* ---------- entry points ---------- */
+  .entries { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:30px 0 6px; }
+  .entry {
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:15px 17px; display:flex; flex-direction:column; gap:4px;
+  }
+  .entry .who { font-weight:640; font-size:15px; display:flex; align-items:center; gap:8px; }
+  .entry .who .ico { font-size:16px; }
+  .entry .path { font-family:var(--mono); font-size:12px; color:var(--ink3); }
+  .converge { text-align:center; font-family:var(--mono); font-size:12.5px; color:var(--ink2); padding:12px 0 2px; }
+  .converge b { color:var(--ink); font-weight:640; }
+  .converge .arrow { color:var(--ember); }
+
+  /* ---------- pipeline spine ---------- */
+  .flow { margin-top:8px; }
+  .stage {
+    display:grid; grid-template-columns:44px 1fr; column-gap:16px; position:relative;
+    padding-bottom:16px;
+  }
+  /* the spine line runs through the node column */
+  .stage::before {
+    content:""; position:absolute; left:21px; top:8px; bottom:-4px; width:2px;
+    background:linear-gradient(var(--ember), var(--ember)); opacity:.30;
+  }
+  .stage:last-child::before { display:none; }
+  .node {
+    grid-row:1; width:44px; height:44px; border-radius:50%;
+    background:var(--surface); border:2px solid var(--cat,var(--slate));
+    color:var(--cat,var(--slate)); font-family:var(--mono); font-weight:700; font-size:15px;
+    display:flex; align-items:center; justify-content:center; z-index:1; position:relative;
+  }
+  .card {
+    background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--cat,var(--slate));
+    border-radius:var(--radius); padding:14px 17px 15px; min-width:0;
+  }
+  .card h3 { margin:0 0 5px; font-size:15.5px; font-weight:640; letter-spacing:-.005em; display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .card p { margin:0; font-size:13.5px; color:var(--ink2); }
+  .card p + p { margin-top:6px; }
+  .tag {
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.03em; text-transform:uppercase;
+    padding:2px 8px; border-radius:999px; font-weight:600; white-space:nowrap;
+    background:color-mix(in srgb, var(--cat) 14%, transparent); color:var(--cat);
+    border:1px solid color-mix(in srgb, var(--cat) 28%, transparent);
+  }
+  .cat-haiku  { --cat:var(--steel); }
+  .cat-sonnet { --cat:var(--ember); }
+  .cat-infra  { --cat:var(--slate); }
+  .cat-data   { --cat:var(--leaf); }
+
+  .meta { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .chip {
+    font-family:var(--mono); font-size:11.5px; color:var(--ink2);
+    background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:2.5px 8px;
+  }
+  .chip b { color:var(--ink); font-weight:640; }
+
+  /* sonnet node ember glow — the one flourish */
+  .node.glow { box-shadow:0 0 0 4px color-mix(in srgb, var(--ember) 16%, transparent); }
+  @media (prefers-reduced-motion: no-preference) {
+    .node.glow { animation:pulse 3.4s ease-in-out infinite; }
+    @keyframes pulse {
+      0%,100% { box-shadow:0 0 0 3px color-mix(in srgb, var(--ember) 10%, transparent); }
+      50%     { box-shadow:0 0 0 7px color-mix(in srgb, var(--ember) 20%, transparent); }
+    }
+  }
+
+  /* routing branch pills */
+  .routes { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-top:11px; }
+  .route {
+    border:1px dashed var(--border); border-radius:9px; padding:9px 11px; background:var(--surface2);
+  }
+  .route .rt { font-family:var(--mono); font-size:12px; font-weight:640; color:var(--ink); }
+  .route .rd { font-size:11.5px; color:var(--ink3); margin-top:2px; }
+  .route.hot { border-style:solid; border-color:color-mix(in srgb, var(--ember) 45%, var(--border)); background:color-mix(in srgb, var(--ember) 7%, var(--surface)); }
+  .route.hot .rt { color:var(--ember); }
+
+  /* ---------- cross-cutting ---------- */
+  .section-label {
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink3); margin:40px 0 14px; display:flex; align-items:center; gap:12px;
+  }
+  .section-label::after { content:""; flex:1; height:1px; background:var(--border); }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .xcard {
+    background:var(--surface); border:1px solid var(--border); border-top:3px solid var(--cat,var(--slate));
+    border-radius:var(--radius); padding:15px 17px;
+  }
+  .xcard h4 { margin:0 0 8px; font-size:14.5px; font-weight:640; display:flex; align-items:center; gap:8px; }
+  .xcard h4 .ico { font-size:15px; }
+  .xcard ul { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+  .xcard li { font-size:12.8px; color:var(--ink2); padding-left:15px; position:relative; }
+  .xcard li::before { content:""; position:absolute; left:0; top:7px; width:5px; height:5px; border-radius:50%; background:var(--cat,var(--slate)); }
+  .xcard code { font-family:var(--mono); font-size:11.5px; background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:1px 5px; color:var(--ink); word-break:break-word; }
+
+  /* callout */
+  .callout {
+    margin-top:16px; background:color-mix(in srgb, var(--ember) 6%, var(--surface));
+    border:1px solid color-mix(in srgb, var(--ember) 26%, var(--border)); border-radius:var(--radius);
+    padding:13px 16px; font-size:13px; color:var(--ink2);
+    display:flex; gap:11px; align-items:flex-start;
+  }
+  .callout .ico { font-size:16px; line-height:1.3; flex:none; }
+  .callout b { color:var(--ink); font-weight:640; }
+
+  /* ---------- params footer ---------- */
+  .params { margin-top:22px; display:flex; flex-wrap:wrap; gap:7px; }
+  .param { font-family:var(--mono); font-size:12px; background:var(--surface); border:1px solid var(--border); border-radius:7px; padding:4px 10px; color:var(--ink2); }
+  .param b { color:var(--ink); font-weight:640; }
+  .foot { margin-top:26px; font-size:12px; color:var(--ink3); font-family:var(--mono); }
+
+  @media (max-width:720px) {
+    .entries { grid-template-columns:1fr; }
+    .grid3 { grid-template-columns:1fr; }
+  }
+
+  /* ---------- print / PDF ---------- */
+  @page { size:A4 landscape; margin:9mm; }
+  @media print {
+    /* force the light palette so the PDF isn't dark and ink-heavy */
+    :root {
+      --bg:var(--l-bg); --surface:var(--l-surface); --surface2:var(--l-surface2); --border:var(--l-border);
+      --ink:var(--l-ink); --ink2:var(--l-ink2); --ink3:var(--l-ink3);
+      --ember:var(--l-ember); --steel:var(--l-steel); --slate:var(--l-slate); --leaf:var(--l-leaf);
+      --glow:var(--l-glow);
+    }
+    body { background:#fff; background-image:none; }
+    .wrap { max-width:none; padding:2mm 3mm 4mm; }
+    h1 { font-size:26px; }
+    /* keep visual units whole across page breaks */
+    .stage, .card, .xcard, .entry, .callout, .routes, .route, .params { break-inside:avoid; }
+    .grid3 { break-inside:avoid; }
+    .node.glow { animation:none; box-shadow:0 0 0 3px color-mix(in srgb, var(--ember) 16%, transparent); }
+  }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">RAG-консультант · прод</p>
+  <h1>Как сейчас работает бот Teplodar</h1>
+  <p class="lede">Путь одного вопроса — от сообщения до ответа. Один пайплайн обслуживает два входа: Telegram и веб-чат. Двухстадийная LLM-логика: холодный анализ на Haiku, тёплый ответ на Sonnet.</p>
+
+  <div class="legend">
+    <span class="lk"><span class="dot steel"></span>Haiku 4.5 — интент · FAQ · судья</span>
+    <span class="lk"><span class="dot ember"></span>Sonnet 4.6 — финальный ответ</span>
+    <span class="lk"><span class="dot slate"></span>Инфраструктура</span>
+    <span class="lk"><span class="dot leaf"></span>База знаний / логи</span>
+  </div>
+
+  <!-- entry points -->
+  <div class="entries">
+    <div class="entry">
+      <span class="who"><span class="ico">✈️</span>Telegram</span>
+      <span class="path">aiogram 3 · long polling</span>
+      <span class="path">bot/routers/consultant.py</span>
+    </div>
+    <div class="entry">
+      <span class="who"><span class="ico">🌐</span>Веб-чат</span>
+      <span class="path">FastAPI · SSE (fetch stream)</span>
+      <span class="path">admin/routers/chat.py</span>
+    </div>
+  </div>
+  <div class="converge"><span class="arrow">▼</span> оба зовут общий <b>AnswerGenerator.answer_with_meta()</b> <span class="arrow">▼</span></div>
+
+  <!-- pipeline -->
+  <div class="flow">
+
+    <div class="stage cat-infra">
+      <div class="node">0</div>
+      <div class="card">
+        <h3>Подстановка синонимов <span class="tag">pre</span></h3>
+        <p>Каждое сообщение прогоняется через словарь синонимов (regex-альтернация): народные названия и опечатки → канонические термины ещё до анализа.</p>
+        <div class="meta"><span class="chip">src/synonyms/store.py</span><span class="chip">apply(query)</span></div>
+      </div>
+    </div>
+
+    <div class="stage cat-haiku">
+      <div class="node">1</div>
+      <div class="card">
+        <h3>Извлечение интента <span class="tag">Haiku · 1 вызов</span></h3>
+        <p>Один CLI-вызов делает всё сразу: классификация типа вопроса, матч по FAQ, переформулировка запроса, город, <code style="font-family:var(--mono)">wants_link</code>, режим «листинг/сравнение». Если вызов упал — фоллбэк на regex-классификатор.</p>
+        <div class="meta"><span class="chip">src/rag/intent_extractor.py</span><span class="chip">⛓ слот-пул CLI</span></div>
+      </div>
+    </div>
+
+    <div class="stage cat-slate">
+      <div class="node" style="--cat:var(--slate)">2</div>
+      <div class="card cat-infra">
+        <h3>Маршрутизация по типу</h3>
+        <p>По результату интента запрос идёт одной из четырёх веток. Три отвечают напрямую, RAG — через поиск.</p>
+        <div class="routes">
+          <div class="route"><div class="rt">FAQ-точный</div><div class="rd">Haiku уже выбрал запись → сразу ответ</div></div>
+          <div class="route"><div class="rt">Дилер</div><div class="rd">dealer_lookup · base/dealers.yaml</div></div>
+          <div class="route"><div class="rt">О компании</div><div class="rd">готовый FAQ_COMPANY-блок</div></div>
+          <div class="route hot"><div class="rt">RAG ▼</div><div class="rd">к гибридному поиску (шаг 3)</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage cat-data">
+      <div class="node">3</div>
+      <div class="card">
+        <h3>Гибридный поиск <span class="tag">только RAG</span></h3>
+        <p>BM25 + dense E5 по numpy-индексу. Слияние скоров с мин-макс нормализацией: <code style="font-family:var(--mono)">0.6·dense + 0.4·bm25</code>, затем товарным чанкам <code style="font-family:var(--mono)">+0.05</code> буста, чтобы не тонули среди PDF.</p>
+        <p>Найденные чанки <b>всегда</b> обогащаются ссылками на товары (без гейта по <code style="font-family:var(--mono)">wants_link</code>).</p>
+        <div class="meta"><span class="chip">hybrid_retriever.py</span><span class="chip"><b>top_k=5</b> (листинг 15)</span><span class="chip">E5 768d · CPU</span></div>
+      </div>
+    </div>
+
+    <div class="stage cat-sonnet">
+      <div class="node glow">4</div>
+      <div class="card">
+        <h3>Генерация ответа <span class="tag">Sonnet 4.6</span></h3>
+        <p>Собирается промпт (чанки + история диалога; FAQ-текст подмешивается только при пустых чанках), длинные чанки smart-обрезаются (голова + хвост с ТТХ/ценой). Ответ → <code style="font-family:var(--mono)">_md_to_html</code> со стэшем URL, чтобы markdown не съел ссылки.</p>
+        <div class="meta"><span class="chip">answer_generator._call_cli_stream</span><span class="chip">⛓ слот-пул CLI</span></div>
+      </div>
+    </div>
+
+    <div class="stage cat-infra">
+      <div class="node" style="--cat:var(--slate)">5</div>
+      <div class="card">
+        <h3>Доставка ответа</h3>
+        <p><b>Telegram:</b> <code style="font-family:var(--mono)">edit_text</code> + футер <code style="font-family:var(--mono)">🔧 v1.3.2 · тип · score · chunks · ⏱ intent/ret/ans</code> + кнопки 👍/👎/🆘 оператор.</p>
+        <p><b>Веб:</b> один SSE-<code style="font-family:var(--mono)">done</code> с <code style="font-family:var(--mono)">answer_html</code> + meta + log_id.</p>
+      </div>
+    </div>
+
+    <div class="stage cat-data">
+      <div class="node">6</div>
+      <div class="card">
+        <h3>Лог в query_logs</h3>
+        <p>Каждый ход пишется в журнал. Telegram — положительный <code style="font-family:var(--mono)">user_id</code>; веб — синтетический <b>отрицательный</b> из session_id (не пересекаются). Отсюда же берётся память диалога — <code style="font-family:var(--mono)">get_recent_dialog</code>, окно 30 минут.</p>
+        <div class="meta"><span class="chip">src/logs/queries.py</span></div>
+      </div>
+    </div>
+
+    <div class="stage cat-haiku">
+      <div class="node">7</div>
+      <div class="card">
+        <h3>Фоновый судья <span class="tag">Haiku · async</span></h3>
+        <p>После ответа отдельным фоновым вызовом Haiku оценивает полезность (<code style="font-family:var(--mono)">usefulness_score</code>) и пишет вердикт в лог. Пользователя не задерживает.</p>
+        <div class="meta"><span class="chip">src/eval/judge.py</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- cross-cutting -->
+  <p class="section-label">Сквозная инфраструктура · работает на каждом шаге</p>
+  <div class="grid3">
+    <div class="xcard cat-infra">
+      <h4><span class="ico">⚙️</span>Claude CLI (Pro)</h4>
+      <ul>
+        <li>Все вызовы — subprocess <code>claude --print --output-format text --no-session-persistence --disallowed-tools --model &lt;id&gt;</code></li>
+        <li>Каждый вызов — свой <code>tempfile.TemporaryDirectory</code> как cwd</li>
+        <li>Cross-process слот-пул на <code>fcntl.flock</code>, <b>N=4</b> (<code>/tmp/teplodar_claude_slots</code>) — общий cap для бота, админки, скриптов</li>
+        <li>Токен — чистый <b>потребитель</b>, расшарен с ArkadiyJarvis (симлинк <code>data/</code>)</li>
+      </ul>
+    </div>
+    <div class="xcard cat-data">
+      <h4><span class="ico">📚</span>База знаний</h4>
+      <ul>
+        <li>SQLite <code>base/teplodar.db</code></li>
+        <li>numpy-индекс <code>embeddings_e5-base-v1.npy</code> + <code>metadata_e5-base-v1.pkl</code></li>
+        <li><b>2961</b> чанк — 2191 товар / 770 PDF+HTML (после dedup 0.92)</li>
+        <li>E5 multilingual-base, 768d, на CPU; прогрет в память</li>
+      </ul>
+    </div>
+    <div class="xcard cat-infra">
+      <h4><span class="ico">♻️</span>Общий генератор</h4>
+      <ul>
+        <li>Один <code>AnswerGenerator</code>-синглтон на всю RAG-логику</li>
+        <li>Бот строит свой в <code>main_bot.py</code></li>
+        <li>Веб-чат и eval делят <code>get_eval_generator()</code></li>
+        <li>Прогревается в lifespan админки → E5 постоянно в RAM</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="ico">⚡</span>
+    <div><b>«Стриминг» — фейковый.</b> CLI в режиме <code style="font-family:var(--mono)">--print</code> отдаёт ответ одним блоком в конце, поэтому в UX летят только события <b>фаз</b> (<code style="font-family:var(--mono)">intent → retrieval → answer</code>), а не токены. Настоящие дельты появятся только при переходе на API/OpenRouter.</div>
+  </div>
+
+  <div class="params">
+    <span class="param">top_k <b>5</b></span>
+    <span class="param">fusion α <b>0.6</b></span>
+    <span class="param">product_boost <b>0.05</b></span>
+    <span class="param">pdf_dedup <b>0.92</b></span>
+    <span class="param">E5 <b>768d</b></span>
+    <span class="param">CLI slots <b>4</b></span>
+    <span class="param">intent+judge <b>Haiku 4.5</b></span>
+    <span class="param">answer <b>Sonnet 4.6</b></span>
+  </div>
+
+  <p class="foot">Схема отражает текущее состояние кода (проверено по src/rag, bot, admin). Прод: /var/www/dedteplodar · docker compose {bot, admin}.</p>
+</div>
