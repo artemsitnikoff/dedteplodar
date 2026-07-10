@@ -34,18 +34,18 @@ python scripts/build_index.py --rebuild
 ## Ключевые директории
 
 - `base/` — knowledge base этого бота: SQLite, numpy index, FAQ, dealers
-- `data/` — расшаренная папка с проектом ArkadiyJarvis. Содержит `data/.claude_token.json` — OAuth токен Claude CLI с авто-рефрешем
+- `data/` — расшаренная папка с проектом ArkadiyJarvis (симлинк, см. «Прод-сервер»). Исторически отсюда брался общий `data/.claude_token.json`; **с релиза 1.3.x авторизация на этот файл больше не завязана** — teplodar использует свой long-lived токен из env (см. «Claude CLI auth»)
 - `bot/` — aiogram-роутеры (consultant, admin)
 - `admin/` — FastAPI приложение + Vue 3 SPA (`admin/frontend/`)
 - `src/rag/` — embedder, chunker, retriever, indexer, answer generator
 - `src/eval/` — модели для eval-датасета (`EvalRun`, `EvalResult`)
-- `src/core/claude_token.py` — авто-рефреш OAuth токена (синхронная + async версии)
+- `src/core/claude_token.py` — авторизация Claude CLI: статик long-lived токен из env (`_static_token`), защита `expiresAt` от протухания (`_safe_expires_at`) + legacy shared-file путь
 
 ## Прод-сервер (важно)
 
 - ArkadiyJarvis уже задеплоен на проде в **`/var/www/ArkadiyJarvis`**
 - Teplodarbot живёт в **`/var/www/dedteplodar`** (исторически назвали `dedteplodar`)
-- Папка `data/` внутри teplodarbot — это **симлинк** на `/var/www/ArkadiyJarvis/data`, НЕ отдельная директория. Так Claude OAuth-токен общий, и авто-рефреш не дублируется между проектами.
+- Папка `data/` внутри teplodarbot — это **симлинк** на `/var/www/ArkadiyJarvis/data`, НЕ отдельная директория (историческое совместное использование токена). ⚠️ **Авторизация Claude CLI на этот общий файл больше не завязана** — teplodar самодостаточен (свой токен в `.env`, см. «Claude CLI auth»). Симлинк оставлен как есть, но для auth не нужен.
 - При первом деплое: `ln -s /var/www/ArkadiyJarvis/data /var/www/dedteplodar/data` (вместо `mkdir data`)
 - В docker-compose том `./data:/app/data` корректно следует через симлинк → внутри контейнера видно содержимое ArkadiyJarvis/data
 - **Деплой**: `cd /var/www/dedteplodar && git pull && docker compose up -d --build bot admin`. Первая сборка после holodnog cache ~10 мин (pip install torch+transformers). Последующие — ~30с если `requirements.txt` не менялся.
@@ -53,9 +53,13 @@ python scripts/build_index.py --rebuild
 
 ## Claude CLI auth
 
-Токен хранится в `data/.claude_token.json` (расшарено с ArkadiyJarvis). При запуске `init_token_file()` подгружает токен из env (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN`), если файла нет. Перед каждым вызовом CLI вызывается `ensure_fresh_token_sync()` — рефреш одноразовый, атомарная запись.
+**Статик long-lived токен (как у ArkadyJarvis/glafiraeuro).** teplodar самодостаточен: в `.env` лежит `CLAUDE_CODE_OAUTH_TOKEN` из `claude setup-token` (живёт ~1 год), `CLAUDE_REFRESH_TOKEN` — **пустой**. Перед каждым вызовом CLI `ensure_fresh_token_sync()` через `_static_token()` берёт токен **прямо из env** (CLI читает `CLAUDE_CODE_OAUTH_TOKEN` первым) и зеркалит в `~/.claude/credentials.json` (для прямых `docker exec`-вызовов). Общий `data/.claude_token.json` при этом **не читается** — сосед (ArkadiyJarvis), ротируя его, не может нас заблокировать.
 
-CLI запускается с флагами `--print --output-format text --no-session-persistence --disallowed-tools --model <id>`. Каждый вызов получает **per-call `tempfile.TemporaryDirectory(prefix="claude_*")`** как `cwd` чтобы concurrent subprocess'ы не толкались на shared `/tmp`-state.
+`_safe_expires_at()`: в credentials.json никогда не пишется протухший `expiresAt` (0/прошлое → клампится на +1 год), иначе CLI ругается `Not logged in · Please run /login` даже на валидном токене. Это же чинит и legacy shared-file путь.
+
+**Legacy-режим** (в env есть refresh-токен И токен не `sk-ant-oat01-`): `ensure_fresh_token_sync()` читает access-токен из shared-файла, teplodar сам НЕ рефрешит (одноразовые токены гонятся с Jarvis). Историческая модель, оставлена для обратной совместимости.
+
+CLI запускается с флагами `--print --output-format text --no-session-persistence --tools "" --model <id>`. **`--tools ""` = отключить ВСЕ инструменты** (белый список, airtight — CLI при генерации ответа не имеет доступа ни к Bash/Write/Edit, ни к Web; никакого RCE). Раньше был чёрный список `--disallowed-tools <перечисление>`, который падал (exit 1) при переименовании инструмента в CLI — инцидент `MultiEdit`/`SlashCommand` уронил все вызовы; ушли на whitelist как ArkadyJarvis. Каждый вызов получает **per-call `tempfile.TemporaryDirectory(prefix="claude_*")`** как `cwd` чтобы concurrent subprocess'ы не толкались на shared `/tmp`-state.
 
 **Cross-process semaphore** (`src/core/claude_cli.py`): file-lock slot pool (`fcntl.flock`) на N=4 слотах в `/tmp/teplodar_claude_slots/`. Бот, admin (eval workers) и скрипты делят cap чтобы не задосить Pro-аккаунт. Polling-loop с `time.sleep(0.1)` (не блокирующий `LOCK_EX`). При недоступной `/tmp` — graceful degrade на uncapped с одним ERROR-логом.
 
