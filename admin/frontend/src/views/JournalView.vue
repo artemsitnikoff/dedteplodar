@@ -16,6 +16,10 @@ const filterFeedback = ref('')
 const search = ref('')
 const searchInput = ref('')
 
+const dateFrom = ref('')
+const dateTo = ref('')
+const exporting = ref(false)
+
 const totalPages = computed(() => Math.ceil(total.value / perPage))
 
 const selected = ref(null)
@@ -84,6 +88,41 @@ function applySearch() {
   search.value = searchInput.value.trim()
   page.value = 1
   load()
+}
+
+async function exportReport() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    // Send the viewer's tz offset (minutes to add to UTC) so date filtering
+    // and the timestamps in the report match what's shown in the table.
+    const params = { tz_offset_min: -new Date().getTimezoneOffset() }
+    if (filterType.value) params.query_type = filterType.value
+    if (filterFeedback.value) params.feedback = filterFeedback.value
+    if (search.value) params.search = search.value
+    if (dateFrom.value) params.date_from = dateFrom.value
+    if (dateTo.value) params.date_to = dateTo.value
+
+    const res = await api.exportJournal(params)
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const cd = res.headers['content-disposition'] || ''
+    const m = cd.match(/filename="?([^"]+)"?/)
+    a.download = m ? m[1] : `teplodar-journal_${dateFrom.value || 'all'}_${dateTo.value || 'all'}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast('Отчёт выгружен', 'success')
+  } catch {
+    toast('Ошибка выгрузки отчёта', 'error')
+  } finally {
+    exporting.value = false
+  }
 }
 
 function onKeydown(e) {
@@ -162,6 +201,15 @@ function formatTs(ts) {
           <option value="operator">🆘 Оператор</option>
           <option value="none">Без оценки</option>
         </select>
+
+        <div class="export-group">
+          <input v-model="dateFrom" type="date" class="filter-select date-input" title="Дата: с" />
+          <span class="date-sep">–</span>
+          <input v-model="dateTo" type="date" class="filter-select date-input" title="Дата: по" />
+          <button class="export-btn" :disabled="exporting" @click="exportReport" title="Скачать журнал в Excel (учитывает выбранные фильтры и даты)">
+            {{ exporting ? 'Готовлю…' : '⬇ Выгрузить отчёт' }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -409,6 +457,41 @@ function formatTs(ts) {
   font-size: var(--fs-13);
   cursor: pointer;
 }
+
+.export-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--border-1);
+}
+
+.date-input {
+  color: var(--fg-2);
+  padding-right: var(--sp-2);
+}
+
+.date-sep {
+  color: var(--fg-3);
+  font-size: var(--fs-13);
+}
+
+.export-btn {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--rad-md);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.export-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.export-btn:disabled { opacity: .55; cursor: default; }
 
 .table-wrap {
   background: var(--bg-panel);

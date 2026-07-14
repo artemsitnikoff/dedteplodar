@@ -90,6 +90,7 @@ export const api = {
   // Journal
   getJournal: (params = {}) => client.get('/journal', { params }),
   getJournalContext: (id) => client.get(`/journal/${id}/context`),
+  exportJournal: (params = {}) => client.get('/journal/export', { params, responseType: 'blob' }),
 
   // Synonyms (fuzzy-match dictionary)
   getSynonyms: (params = {}) => client.get('/synonyms', { params }),
