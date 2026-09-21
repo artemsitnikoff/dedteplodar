@@ -42,6 +42,9 @@ class AnswerMeta:
     t_retrieval_ms: int | None = None      # E5 embed + BM25 + fusion + dedup
     t_answer_ms: int | None = None         # Claude CLI final answer call
     t_answer_model: str | None = None      # which model served the final answer
+    # Intent said the user wants a person / complains about their own order.
+    # Channels with a human fallback (Bitrix24) hand the dialog off on this.
+    needs_human: bool = False
 
 logger = logging.getLogger(__name__)
 
@@ -687,6 +690,7 @@ class AnswerGenerator:
             meta = AnswerMeta(query_type="FAQ_EXACT", top_score=1.0)
             meta.t_history_ms = t_history_ms
             meta.t_intent_ms = t_intent_ms
+            meta.needs_human = intent.needs_human
             meta.latency_ms = int((time.monotonic() - t0) * 1000)
             return entry.answer, meta
 
@@ -712,6 +716,7 @@ class AnswerGenerator:
 
         meta.t_history_ms = t_history_ms
         meta.t_intent_ms = t_intent_ms
+        meta.needs_human = intent.needs_human
         meta.latency_ms = int((time.monotonic() - t0) * 1000)
         logger.info(
             "[timing] total=%dms (history=%dms intent=%dms retrieval=%sms answer=%sms model=%s)",

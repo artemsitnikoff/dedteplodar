@@ -56,7 +56,38 @@ TRANSFER_FAILED_TEXT = (
     "Не получилось передать диалог оператору автоматически. Позвоните нам, и вам помогут:\n" + _HOTLINE
 )
 
-_OPERATOR_RE = re.compile(r"\b(оператор\w*|человек\w*|менеджер\w*|живой|специалист\w*)\b", re.IGNORECASE)
+# ── Layer 1 of "wants a human" detection: instant, no LLM ────────────────
+# Nouns that mean "human support" on their own — generic wishes are enough.
+_SUPPORT_NOUN = r"(?:оператор\w*|поддержк\w*|техподдержк\w*|саппорт\w*)"
+# Nouns that also occur in ordinary product questions ("менеджер по опту",
+# "монтаж у ваших специалистов") — require a connect/contact verb.
+_STAFF_NOUN = r"(?:менеджер\w*|сотрудник\w*|специалист\w*|консультант\w*|продавц\w*|продавец)"
+_CONNECT_VERB = (
+    r"(?:соедин\w*|переключ\w*|перевед\w*|переведи\w*|подключ\w*|позов\w*|позват\w*|свяж\w*|связат\w*"
+    r"|дай(?:те)?|поговорит\w*|пообщат\w*|общат\w*|написат\w*|обратит\w*|позвон\w*|вызов\w*|вызв\w*)"
+)
+_GENERIC_WISH = r"(?:хочу|хотел\w*|нужен|нужна|нужно|надо|можно|давайте)"
+_SPEECH_AFTER_NOUN = re.compile(
+    rf"\b(?:{_SUPPORT_NOUN}|{_STAFF_NOUN})\s+(?:сказал\w*|говорил\w*|ответил\w*|посоветовал\w*|обещал\w*|звонил\w*|написал\w*)",
+    re.IGNORECASE,
+)
+_SUPPORT_REQUEST = re.compile(rf"\b(?:{_CONNECT_VERB}|{_GENERIC_WISH})\b.*\b{_SUPPORT_NOUN}|\b{_SUPPORT_NOUN}\b.*\b(?:{_CONNECT_VERB}|{_GENERIC_WISH})\b", re.IGNORECASE | re.DOTALL)
+_STAFF_REQUEST = re.compile(rf"\b{_CONNECT_VERB}\b.*\b{_STAFF_NOUN}|\b{_STAFF_NOUN}\b.*\b{_CONNECT_VERB}\b", re.IGNORECASE | re.DOTALL)
+# "человек" is too common ("сколько человек нужно…"): only as a person to talk to.
+_PERSON_REQUEST = re.compile(
+    r"жив\w+\s+человек\w*|\bс\s+человеком\b|\bдай(?:те)?\s+человека\b|\bчеловека\s*[!.?…]*$|\bне\s+бот\w*\b",
+    re.IGNORECASE,
+)
+# Phrases that mean "I want a person" without naming one — any length.
+_STANDALONE_REQUEST = re.compile(
+    r"\bпозвон\w*\s+мне\b|\bс\s+кем\s+(?:можно\s+|мне\s+)?(?:поговорить|связаться|пообщаться|общаться)\b"
+    r"|\b(?:поговорить|пообщаться|связаться)\s+с\s+кем-(?:нибудь|то)\b|\bэто\s+бот\b",
+    re.IGNORECASE,
+)
+# A one-word demand: «оператора!», «менеджера?», «поддержка».
+_BARE_NOUN = re.compile(rf"^\W*(?:{_SUPPORT_NOUN}|{_STAFF_NOUN})\W*$", re.IGNORECASE)
+_SHORT_MESSAGE = 80
+
 # Questions about the client's own order/complaint — no knowledge base can
 # answer these, and the intent prompt already refuses FAQ matches for them.
 _PERSONAL_ORDER_RE = re.compile(
@@ -69,6 +100,7 @@ _PERSONAL_ORDER_RE = re.compile(
 REASON_REQUESTED = "requested"
 REASON_PERSONAL_ORDER = "personal_order"
 REASON_ERRORS = "consecutive_errors"
+REASON_INTENT = "intent_needs_human"
 
 _SEEN_MAX = 2000
 _seen_message_ids: "OrderedDict[int, None]" = OrderedDict()
@@ -105,13 +137,25 @@ def operator_keyboard() -> list[dict]:
 
 
 def is_operator_request(text: str) -> bool:
-    t = text.strip()
+    """Layer 1: does the client explicitly ask for a person?
+
+    Instant regex pass (layer 2 is the `needs_human` flag from the intent
+    extractor, which costs an LLM call and fires after generation). Tuned to
+    avoid handing off ordinary questions that merely *mention* staff:
+    «оператор сказал…», «менеджер по опту», «сколько человек нужно…».
+    """
+    t = (text or "").strip()
     if not t:
         return False
     if t.casefold() == OPERATOR_REQUEST_TEXT.casefold():
         return True
-    # Short free-text asks like "позовите оператора" / "нужен человек".
-    return len(t) <= 60 and bool(_OPERATOR_RE.search(t))
+    if _STANDALONE_REQUEST.search(t) or _BARE_NOUN.match(t):
+        return True
+    if len(t) > _SHORT_MESSAGE:
+        return False
+    if _SPEECH_AFTER_NOUN.search(t):
+        return False
+    return bool(_SUPPORT_REQUEST.search(t) or _STAFF_REQUEST.search(t) or _PERSON_REQUEST.search(t))
 
 
 def is_personal_order(text: str) -> bool:
@@ -195,6 +239,14 @@ async def handle_event(ev: B24Event) -> None:
         answer_html, meta = FALLBACK_TEXT, _error_meta()
 
     is_error = meta.query_type == "ERROR"
+    if getattr(meta, "needs_human", False) and not is_error:
+        # Layer 2: Haiku read the question as "wants a person / own-order
+        # complaint". The generated answer is not delivered — the placeholder
+        # becomes the handoff message instead.
+        logger.info("[b24] intent needs_human chat=%s — handing off (unsent answer: %r)", ev.chat_id, answer_html[:200])
+        await escalate(ev, client, bot_id, REASON_INTENT, user_id, username, placeholder_id=placeholder_id)
+        return
+
     log_id = save_query_log(
         question=ev.text,
         answer=answer_html,
@@ -239,11 +291,13 @@ async def escalate(
     username: str,
     *,
     log_turn: bool = True,
+    placeholder_id: int | None = None,
 ) -> bool:
     """Tell the client, hand the Open Line dialog to a human, remember it.
 
     Returns True if Bitrix accepted the transfer. On failure the client gets
-    the hotline instead and the dialog stays with the bot.
+    the hotline instead and the dialog stays with the bot. If a placeholder
+    message is already on screen, it is edited into the handoff text.
     """
     if log_turn:
         log_id = save_query_log(
@@ -269,12 +323,15 @@ async def escalate(
         logger.error("[b24] transfer failed chat=%s reason=%s: %s", ev.chat_id, reason, e)
         ok = False
 
+    text = TRANSFER_TEXT if ok else TRANSFER_FAILED_TEXT
     if ok:
         sessions.mark_handoff(ev.chat_id, reason)
-        await _safe_send(client, bot_id, ev.dialog_id, TRANSFER_TEXT)
         logger.info("[b24] handed off chat=%s reason=%s user=%s", ev.chat_id, reason, username)
-    else:
-        await _safe_send(client, bot_id, ev.dialog_id, TRANSFER_FAILED_TEXT)
+    shown = False
+    if placeholder_id:
+        shown = await _safe_update(client, bot_id, placeholder_id, text, "N")
+    if not shown:
+        await _safe_send(client, bot_id, ev.dialog_id, text)
     return ok
 
 

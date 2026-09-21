@@ -142,12 +142,6 @@ def test_generator_failure_sends_fallback_without_escalating_first_time(env):
     assert "operator" not in [x[0] for x in c] and sessions.get_status(19167) == STATUS_BOT
 
 
-def test_long_text_mentioning_operator_is_still_a_question(env):
-    text = "Оператор на горячей линии сказал, что печь Русь-12 подходит на 14 кубов, это правда?"
-    run(event(**{"data.message.text": text}))
-    assert len(env["gen"].calls) == 1
-
-
 def test_journal_identity_is_stable_per_chat():
     a = svc.journal_identity(event())
     b = svc.journal_identity(event(**{"data.message.id": "999", "data.message.text": "другой"}))
@@ -157,7 +151,34 @@ def test_journal_identity_is_stable_per_chat():
 
 # ── escalation ────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("text", ["Позвать оператора", "позовите оператора", "нужен живой человек", "менеджера пожалуйста"])
+OPERATOR_PHRASES = [
+    "Позвать оператора", "позовите оператора", "соедините с оператором", "соедини меня с оператором",
+    "переключите на оператора", "хочу поговорить с человеком", "можно с живым человеком?", "нужен живой человек",
+    "позовите менеджера", "свяжите с сотрудником", "переключите на поддержку", "хочу в техподдержку",
+    "хочу написать в поддержку", "позвоните мне", "с кем можно поговорить?", "это бот? дайте человека",
+    "свяжите с продавцом", "дайте оператора", "хочу поговорить с менеджером", "оператора!", "Менеджера?", "поддержка",
+    "Хочу купить Русь-12 с баком, позвоните мне пожалуйста по номеру +7 900 000-00-00, удобно после 18",
+]
+NOT_OPERATOR_PHRASES = [
+    "оператор сказал что Русь-12 подходит?", "какой оператор лучше — Русь или Сахара?",
+    "у вас есть менеджер по опту?", "сколько человек нужно чтобы установить печь?",
+    "можно ли заказать монтаж у ваших специалистов?", "консультант есть?", "нужен специалист по монтажу?",
+    "как связаться с дилером в Сургуте?", "какие сроки доставки заказа?", "менеджер написал что печь в наличии, это так?",
+    "Оператор на горячей линии сказал, что печь Русь-12 подходит на 14 кубов, это правда?",
+]
+
+
+@pytest.mark.parametrize("text", OPERATOR_PHRASES)
+def test_is_operator_request_positive(text):
+    assert svc.is_operator_request(text), text
+
+
+@pytest.mark.parametrize("text", NOT_OPERATOR_PHRASES)
+def test_is_operator_request_negative(text):
+    assert not svc.is_operator_request(text) and not svc.is_personal_order(text), text
+
+
+@pytest.mark.parametrize("text", ["Позвать оператора", "соедините с оператором", "нужен живой человек", "менеджера позовите"])
 def test_operator_request_transfers_and_silences_bot(env, text):
     run(event(**{"data.message.text": text}))
     assert env["gen"].calls == []
@@ -233,3 +254,35 @@ def test_join_chat_resets_state(env):
     assert sessions.get_status(19167) == STATUS_BOT
     run(event(**{"data.message.id": "10", "data.message.text": "вопрос"}))
     assert len(env["gen"].calls) == 1
+
+
+# ── layer 2: intent says needs_human ──────────────────────────────────────
+
+def test_intent_needs_human_hands_off_instead_of_answering(env):
+    gen = env["gen"]
+
+    def answer_with_meta(session, query, user_id=None, **kw):
+        gen.calls.append((query, user_id))
+        return "<b>Обратитесь на горячую линию</b>", SimpleNamespace(
+            query_type="FAQ_COMPANY", top_score=None, chunks_used=0, city=None, reformulated_query=None,
+            t_intent_ms=1, t_retrieval_ms=None, t_answer_ms=1, t_answer_model="sonnet", needs_human=True,
+        )
+
+    gen.answer_with_meta = answer_with_meta
+    # Nothing for layer 1 to catch (no staff nouns, no order words) — only Haiku reads the frustration.
+    text = "Третий раз задаю вопрос и получаю ерунду, сколько это будет продолжаться?"
+    assert not svc.is_operator_request(text) and not svc.is_personal_order(text)
+    run(event(**{"data.message.text": text}))
+    c = FakeClient.instances[0].calls
+    # placeholder → transfer → placeholder edited into the handoff text (keyboard removed)
+    assert [x[0] for x in c] == ["send", "operator", "update"]
+    assert c[0][3] == svc.PLACEHOLDER_TEXT
+    assert c[2][2] == 101 and c[2][3] == svc.TRANSFER_TEXT and c[2][4] == "N"
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+    assert [l["query_type"] for l in env["logged"]] == ["OPERATOR"] and env["judged"] == []
+
+
+def test_intent_needs_human_false_is_normal_answer(env):
+    run(event())  # FakeGenerator meta has no needs_human attribute → treated as False
+    assert [x[0] for x in FakeClient.instances[0].calls] == ["send", "update"]
+    assert sessions.get_status(19167) == STATUS_BOT

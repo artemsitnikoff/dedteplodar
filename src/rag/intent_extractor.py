@@ -40,6 +40,7 @@ class Intent:
     product_mention: Optional[str] = None     # specific model the user named, if any
     is_listing: bool = False             # query asks for a list of models, not one
     comparison_targets: list[str] = None      # ["Русь", "Сахара"] when user compares — fan out retrieval
+    needs_human: bool = False            # user asks for a person / complains about THEIR order — hand off
 
     def __post_init__(self):
         if self.comparison_targets is None:
@@ -57,7 +58,8 @@ _PROMPT = """Ты — анализатор запросов покупателя
   "reformulated_query": "<технический поисковый запрос для базы знаний, 1-2 предложения>",
   "product_mention": null | "<точное название модели, упомянутой пользователем>",
   "is_listing": true | false,
-  "comparison_targets": [] | ["Русь", "Сахара"]
+  "comparison_targets": [] | ["Русь", "Сахара"],
+  "needs_human": true | false
 }}
 
 Правила:
@@ -111,6 +113,8 @@ _PROMPT = """Ты — анализатор запросов покупателя
 7. **is_listing**: true если пользователь спрашивает что доступно в каталоге, а не конкретные характеристики одной модели. Триггеры: «список», «все модели», «какие есть», «какие у вас», «что есть», «есть ли что-нибудь / какое-нибудь», «варианты», «ассортимент», «что доступно», «подбери», «посоветуй несколько», «дай выбор». Также true для вопросов типа «есть что-то X?», «у вас бывают X?». Иначе false.
 
 8. **comparison_targets**: если вопрос сравнивает несколько товаров / серий («разница X и Y», «X vs Y», «что лучше», «отличие»), верни массив их названий — например ["Русь", "Сахара"], ["Куппер-12", "Куппер-18"]. Если сравнения нет — пустой массив [].
+
+9. **needs_human**: true, если пользователь просит связать его с живым человеком (оператор, менеджер, поддержка, «с кем можно поговорить», «позвоните мне», «это бот?»), жалуется или требует решения по СВОЕМУ заказу/доставке/браку, либо явно недоволен ответами бота. false для обычных вопросов о товарах, доставке, оплате и компании — даже если в них упомянуты слова «оператор» или «менеджер» как персонажи («оператор сказал…», «есть ли менеджер по опту»).
 
 FAQ:
 {faq_list}
@@ -215,6 +219,14 @@ def extract_intent(
         logger.warning("intent extractor returned no output (code=%s)", result.returncode)
         return None
 
+    return _parse_intent(text, query, faq_entries)
+
+
+def _parse_intent(text: str, query: str, faq_entries: list) -> Optional[Intent]:
+    """Turn the raw LLM output into an Intent (None if it is unusable).
+
+    Kept separate from the subprocess plumbing so it can be unit-tested.
+    """
     # Sometimes Claude wraps JSON in ```json ... ```. Pull the first {...} block.
     m = _JSON_BLOCK_RE.search(text)
     if not m:
@@ -249,11 +261,12 @@ def extract_intent(
         product_mention=(data.get("product_mention") or None),
         is_listing=bool(data.get("is_listing")),
         comparison_targets=comparison_targets,
+        needs_human=bool(data.get("needs_human")),
     )
     logger.info(
-        "[intent] parsed: intent=%s faq_match_id=%s city=%s wants_link=%s listing=%s product=%r reformulated=%r",
+        "[intent] parsed: intent=%s faq_match_id=%s city=%s wants_link=%s listing=%s needs_human=%s product=%r reformulated=%r",
         intent.intent, intent.faq_match_id, intent.city,
-        intent.wants_link, intent.is_listing, intent.product_mention,
+        intent.wants_link, intent.is_listing, intent.needs_human, intent.product_mention,
         (intent.reformulated_query or "")[:80],
     )
     return intent

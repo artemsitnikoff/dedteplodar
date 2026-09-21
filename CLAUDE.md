@@ -194,13 +194,15 @@ Reliability:
 «Позвать оператора»), REST `src/b24/client.py`, HTML→BBCode `src/b24/format.py`; этап 3 — эскалация: таблица
 `b24_sessions` (`src/b24/models.py`, schema-probe `b24_sessions` в `assert_schema_ready`), state-machine
 `src/b24/sessions.py`, передача через `imopenlines.bot.session.operator|transfer`, бот молчит пока диалог у
-оператора. ⚠️ `b24_service` не должен
+оператора. Распознавание «хочу человека» в два слоя: регэкспы в `b24_service` + поле `needs_human` в
+`Intent`/`AnswerMeta` (правило 9 промпта intent-экстрактора; Telegram/веб его пока игнорируют — можно
+использовать для кнопки оператора). ⚠️ Промпт изменён → нужен eval-прогон после деплоя. ⚠️ `b24_service` не должен
 импортировать `src.rag.*` на уровне модуля — иначе admin потянет torch при старте роутера. Judge веб-чата и Б24
 общий: `admin/services/judge_service.py`. Тесты: `PYTHONPATH=. pytest tests/ -q`. Стенд: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`.
 
 ## Что осталось / возможные дальнейшие правки
 
 - Cross-container slot pool (общий volume в `docker-compose.yml`) — когда трафик вырастет.
-- INTENT_PROMPT_TPL сейчас ~2078 токенов. Можно сжать до ~1200 → -1-2с на Haiku. Нужен eval-run чтобы убедиться что классификация не упала.
+- INTENT_PROMPT_TPL сейчас ~2150 токенов (правило 9 `needs_human` добавило ~70). Можно сжать до ~1200 → -1-2с на Haiku. Нужен eval-run чтобы убедиться что классификация не упала.
 - LRU кеш intent-результатов (hash(query) → Intent). Повторяющиеся вопросы (FAQ-like) отдавали бы intent мгновенно, -10-15с.
 - Если перейдём на API/OpenRouter — `mode="api"` skeleton уже есть, можно подключить prompt caching на статичный префикс (system+FAQ), ~−3-5с на cache hit.
