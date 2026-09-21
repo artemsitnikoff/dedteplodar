@@ -40,8 +40,9 @@ async def lifespan(app: FastAPI):
     # don't let the admin start serving requests against a broken DB.
     import src.logs.models  # noqa: F401
     import src.eval.models  # noqa: F401
+    import src.b24.models  # noqa: F401
     from src.core.migrations import assert_schema_ready
-    assert_schema_ready(expected=["query_logs", "eval"])
+    assert_schema_ready(expected=["query_logs", "eval", "b24_sessions"])
 
     # Warm up the RAG generator in the background so the first web-chat
     # request doesn't pay the ~30s E5 + index load. Non-blocking: startup

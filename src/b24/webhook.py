@@ -20,6 +20,7 @@ SECRET_KEYS = frozenset({"access_token", "refresh_token", "application_token", "
 
 EVENT_MESSAGE_ADD = "ONIMBOTV2MESSAGEADD"
 EVENT_COMMAND_ADD = "ONIMBOTV2COMMANDADD"
+EVENT_JOIN_CHAT = "ONIMBOTV2JOINCHAT"
 ENTITY_TYPE_OPEN_LINES = "LINES"
 
 
@@ -118,6 +119,10 @@ class B24Event:
     @property
     def is_message(self) -> bool:
         return self.event == EVENT_MESSAGE_ADD
+
+    @property
+    def is_join(self) -> bool:
+        return self.event == EVENT_JOIN_CHAT
 
     @property
     def is_open_line(self) -> bool:

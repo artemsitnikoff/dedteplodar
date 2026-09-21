@@ -83,3 +83,27 @@ def test_requires_endpoint_and_token():
         B24Client("", "tok")
     with pytest.raises(ValueError):
         B24Client("https://x/rest/", "")
+
+
+def test_open_line_session_methods_param_shapes():
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"result": True})
+
+    c = make_client(handler)
+    assert asyncio.run(c.session_operator(19167)) is True
+    assert asyncio.run(c.session_transfer(19167, "queue7")) is True
+    assert asyncio.run(c.session_transfer(19167, 42, leave=True)) is True
+    assert asyncio.run(c.session_finish(19167)) is True
+    paths = [p for p, _ in seen]
+    assert paths == [
+        "/rest/imopenlines.bot.session.operator",
+        "/rest/imopenlines.bot.session.transfer",
+        "/rest/imopenlines.bot.session.transfer",
+        "/rest/imopenlines.bot.session.finish",
+    ]
+    assert seen[0][1] == {"CHAT_ID": 19167, "auth": "tok"}
+    assert seen[1][1] == {"CHAT_ID": 19167, "TRANSFER_ID": "queue7", "LEAVE": "N", "auth": "tok"}
+    assert seen[2][1]["TRANSFER_ID"] == "42" and seen[2][1]["LEAVE"] == "Y"

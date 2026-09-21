@@ -2,8 +2,8 @@
 
 One instance per webhook event: the event carries a fresh ``access_token``
 (valid 1 h) and the portal's ``client_endpoint`` (``https://<portal>/rest/``),
-so no token storage or refresh is needed. Only the two methods stage 2 uses
-are wrapped; ``call()`` is generic for the escalation methods of stage 3.
+so no token storage or refresh is needed. Message send/update (stage 2) and the Open Line session methods used for
+escalation (stage 3) are wrapped; ``call()`` is generic for anything else.
 """
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 METHOD_MESSAGE_SEND = "imbot.v2.Chat.Message.send"
 METHOD_MESSAGE_UPDATE = "imbot.v2.Chat.Message.update"
+METHOD_SESSION_OPERATOR = "imopenlines.bot.session.operator"   # first free operator
+METHOD_SESSION_TRANSFER = "imopenlines.bot.session.transfer"   # specific user / queue
+METHOD_SESSION_FINISH = "imopenlines.bot.session.finish"
 
 _RETRY_ATTEMPTS = 3
 _RETRY_BACKOFF_S = 0.5
@@ -124,4 +127,25 @@ class B24Client:
         result = await self.call(METHOD_MESSAGE_UPDATE, {"botId": bot_id, "messageId": message_id, "fields": fields})
         if isinstance(result, dict):
             return bool(result.get("result", True))
+        return bool(result)
+
+    # ── Open Lines session control (scope imopenlines) ──────────────────
+
+    async def session_operator(self, chat_id: int) -> bool:
+        """Hand the dialog to the first free operator of the line."""
+        result = await self.call(METHOD_SESSION_OPERATOR, {"CHAT_ID": chat_id})
+        return bool(result)
+
+    async def session_transfer(self, chat_id: int, transfer_id: str | int, *, leave: bool = False) -> bool:
+        """Hand the dialog to a specific user id or ``queue<QUEUE_ID>``.
+
+        ``leave=False`` keeps the bot in the chat as an observer until the
+        operator confirms (Bitrix default); ``True`` drops it immediately.
+        """
+        params = {"CHAT_ID": chat_id, "TRANSFER_ID": str(transfer_id), "LEAVE": "Y" if leave else "N"}
+        result = await self.call(METHOD_SESSION_TRANSFER, params)
+        return bool(result)
+
+    async def session_finish(self, chat_id: int) -> bool:
+        result = await self.call(METHOD_SESSION_FINISH, {"CHAT_ID": chat_id})
         return bool(result)

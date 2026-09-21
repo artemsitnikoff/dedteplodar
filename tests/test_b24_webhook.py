@@ -177,3 +177,9 @@ def test_route_rejects_oversized_body(client):
 
 def test_other_api_routes_still_need_basic_auth(client):
     assert client.get("/api/v1/products/").status_code == 401
+
+
+def test_route_spawns_for_join_chat(client):
+    join = message_add_payload(**{"event": "ONIMBOTV2JOINCHAT", "data.message.text": ""})
+    r = client.post("/api/v1/b24/events", content=encode(join), headers=FORM)
+    assert r.status_code == 200 and len(client.spawned) == 1 and client.spawned[0].is_join

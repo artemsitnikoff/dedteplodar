@@ -191,7 +191,10 @@ Reliability:
 открытые вопросы). В коде (ветка `bitrix24`): этап 1 — `POST /api/v1/b24/events` (`admin/routers/b24.py`,
 парсер/верификация `src/b24/webhook.py`, без basic-auth, `B24_APPLICATION_TOKEN` в `.env`); этап 2 — фоновый
 ответ `admin/services/b24_service.py` (плейсхолдер → `answer_with_meta` → журнал → правка в ответ + кнопка
-«Позвать оператора»), REST `src/b24/client.py`, HTML→BBCode `src/b24/format.py`. ⚠️ `b24_service` не должен
+«Позвать оператора»), REST `src/b24/client.py`, HTML→BBCode `src/b24/format.py`; этап 3 — эскалация: таблица
+`b24_sessions` (`src/b24/models.py`, schema-probe `b24_sessions` в `assert_schema_ready`), state-machine
+`src/b24/sessions.py`, передача через `imopenlines.bot.session.operator|transfer`, бот молчит пока диалог у
+оператора. ⚠️ `b24_service` не должен
 импортировать `src.rag.*` на уровне модуля — иначе admin потянет torch при старте роутера. Judge веб-чата и Б24
 общий: `admin/services/judge_service.py`. Тесты: `PYTHONPATH=. pytest tests/ -q`. Стенд: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`.
 

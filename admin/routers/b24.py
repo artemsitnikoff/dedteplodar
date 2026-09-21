@@ -77,6 +77,6 @@ async def events(request: Request):
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[b24] payload=%s", json.dumps(mask_secrets(payload), ensure_ascii=False))
 
-    if ev.should_answer:
+    if ev.should_answer or ev.is_join:
         spawn_handle_event(ev)
     return {"ok": True}

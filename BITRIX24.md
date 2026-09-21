@@ -3,17 +3,23 @@
 Справочник по работе с Bitrix24 (Б24) для этого проекта. Собран из официальной документации
 (ссылки в конце) и из реального перехваченного запроса. Цель — не ходить по URL каждый раз.
 
-**Статус на 2026-09-21:** реализованы **этапы 1–2** (ветка `bitrix24`, в `main` не влито, на стенд не выкачено).
+**Статус на 2026-09-21:** реализованы **этапы 1–3** (ветка `bitrix24`, в `main` не влито, на стенд не выкачено).
 - Этап 1 — приём вебхука: `POST /api/v1/b24/events` (`admin/routers/b24.py`, парсер/верификация
   `src/b24/webhook.py`). Проверяет `application_token`, разбирает form-urlencoded, отвечает 200.
 - Этап 2 — ответ клиенту: `admin/services/b24_service.py` (фон после 200: дедуп → плейсхолдер «ищу ответ» →
   `answer_with_meta` → журнал → правка плейсхолдера в ответ + кнопка «Позвать оператора»),
-  REST-клиент `src/b24/client.py`, конвертер HTML→BBCode `src/b24/format.py`. Кнопка/слова «оператор»
-  пока дают заглушку с телефонами — настоящая передача в этапе 3.
+  REST-клиент `src/b24/client.py`, конвертер HTML→BBCode `src/b24/format.py`.
+- Этап 3 — эскалация: таблица `b24_sessions` (`src/b24/models.py`, state-machine в `src/b24/sessions.py`),
+  передача через `imopenlines.bot.session.operator` (или `.transfer`, если задан `B24_TRANSFER_TO`).
+  Триггеры: кнопка / короткое «оператор, человек, менеджер»; фразы про личный заказ («мой заказ», «статус
+  заказа», «брак», «возврат денег», «рекламация»); 2 ошибки генерации подряд. После передачи бот молчит,
+  пока Bitrix не откроет новую сессию линии (меняется `entityId`), не придёт `ONIMBOTV2JOINCHAT`, или не
+  истечёт TTL (`B24_OPERATOR_TTL_MINUTES`, 12 ч). Эскалация пишется в журнал как `OPERATOR` + `feedback=operator`.
 - Тесты: `PYTHONPATH=. pytest tests/ -q` (50 кейсов на реальной форме события).
 - **Не проверено на живом портале:** регистр ключей клавиатуры (`fields.keyboard` + `TEXT/ACTION/...`),
-  поведение `imbot.v2.Chat.Message.update` в чате линии, что `ACTION: SEND` приходит как `ONIMBOTV2MESSAGEADD`.
-  Проверять первым делом после деплоя.
+  поведение `imbot.v2.Chat.Message.update` в чате линии, что `ACTION: SEND` приходит как `ONIMBOTV2MESSAGEADD`,
+  что после `session.operator` бот перестаёт получать `MESSAGEADD` и что новая сессия линии приходит с новым
+  `entityId`. Проверять первым делом после деплоя.
 
 Разработчик Б24 со своей стороны уже зарегистрировал бота и тестовую линию; после деплоя ему нужно
 переключить `webhookUrl` на `http://5.253.228.164:8001/api/v1/b24/events` (HTTPS — см. §2).
@@ -329,23 +335,27 @@ claude mcp add --transport http bitrix24-docs https://mcp-dev.bitrix24.tech/mcp
    `B24Event`; `B24Event.should_answer` = `ONIMBOTV2MESSAGEADD` + `entityType == LINES` + автор не бот + непустой текст.
 4. ✅ **Дедуп** по `data.message.id` (LRU 2000 в `b24_service.mark_seen`), т.к. повторы приходят.
 5. ✅ **Ответ 200 сразу**, работа — `asyncio.create_task` со strong-ref (`spawn_handle_event`).
-6. **Состояние сессии** (новая таблица SQLite, ключ `chat_id`): `bot | handoff_pending | operator | closed`.
-   Если `operator` — бот молчит. Сейчас бот stateless, это новое.
+6. ✅ **Состояние сессии**: таблица `b24_sessions` (ключ `chat_id`): `bot | operator | closed`; хранит
+   `line_session_id` из `entityId`, счётчики ходов/ошибок, причину и время передачи. Если `operator` — бот молчит.
+   Возврат к `bot`: новый `line_session_id`, `ONIMBOTV2JOINCHAT`, TTL.
 7. ✅ **Генерация**: `answer_with_meta(session, text, user_id=synthetic)` — история подтягивается из
    `query_logs` по синтетическому `user_id` (ключ — `chat_id`, окно 30 мин как у Telegram). Сразу шлётся
    плейсхолдер «Секунду, ищу ответ…», затем он редактируется в ответ (`imbot.v2.Chat.Message.update`);
    если правка не удалась — новое сообщение.
 8. ✅ **Конвертация** HTML → BBCode (`src/b24/format.py`, §5), кнопка «Позвать оператора» (`ACTION: SEND`,
    `b24_service.operator_keyboard`).
-9. **Эскалация** → `imopenlines.bot.session.operator` (или `transfer` в очередь, если Б24 скажут id).
-   Триггеры: текст кнопки/«оператор»/«человек»; intent личного заказа (уже есть правило в
-   `intent_extractor`); нет чанков / низкий `top_score`; N-й 👎 или переспрос. Перед передачей —
-   отправить оператору сводку (транскрипт + категория) сообщением в чат, чтобы клиент не повторялся.
+9. ✅ **Эскалация** → `imopenlines.bot.session.operator`, либо `.transfer` с `TRANSFER_ID = B24_TRANSFER_TO`
+   (`queue<ID>` или id сотрудника, `LEAVE=N`). Триггеры: кнопка / короткое «оператор|человек|менеджер|специалист»;
+   регэксп личного заказа (`_PERSONAL_ORDER_RE`); `B24_MAX_CONSECUTIVE_ERRORS` ошибок подряд. Клиенту уходит
+   «Передаю диалог оператору» + телефоны; при отказе Bitrix — текст с телефонами, диалог остаётся у бота;
+   `WRONG_CHAT` (уже у оператора) считается успехом. Сводку оператору не шлём: история сессии видна ему целиком.
+   ❌ Не сделано: триггер по низкому `top_score` (шкала не откалибрована) и по повторным 👎.
 10. ✅ **Журнал**: `query_logs` с `user_id = synthetic_user_id("b24:chat<chat_id>")`,
     `username = "b24:<имя>#<user_id>"`, `bot_message_id` = id плейсхолдера; judge через общий
     `admin/services/judge_service.py` (туда же переехал judge веб-чата). Запрос оператора пишется как
     `query_type = OPERATOR`.
-11. ✅(частично) **Env**: `B24_APPLICATION_TOKEN`, `B24_BOT_ID=511` — уже в `config.py`/`.env.example`; опц. `B24_OPERATOR_QUEUE_ID` / `B24_OPERATOR_USER_ID`,
+11. ✅ **Env**: `B24_APPLICATION_TOKEN`, `B24_BOT_ID=511`, `B24_TRANSFER_TO`, `B24_MAX_CONSECUTIVE_ERRORS`,
+    `B24_OPERATOR_TTL_MINUTES` — в `config.py`/`.env.example`; опц. `B24_OPERATOR_QUEUE_ID` / `B24_OPERATOR_USER_ID`,
     `B24_PUBLIC_URL` (для документации/логов). `client_endpoint` и `access_token` берём из события.
 12. **Инфра**: домен + nginx + HTTPS перед 8001; после этого попросить Б24 обновить `webhookUrl`
     через `imbot.v2.Bot.update`. Деплой ручной: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`,

@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # id of the bot registered by the Б24 developer (data[bot][id]); needed for
     # imbot.v2.Chat.Message.send in stage 2.
     b24_bot_id: int = Field(default=0)
+    # Where to hand a dialog off. Empty → imopenlines.bot.session.operator
+    # (first free operator of the line). "queue<ID>" or a user id →
+    # imopenlines.bot.session.transfer with TRANSFER_ID.
+    b24_transfer_to: str = Field(default="")
+    # Auto-escalate after this many consecutive generation errors in one dialog.
+    b24_max_consecutive_errors: int = Field(default=2)
+    # Safety net: "operator" state expires after this long, since Bitrix
+    # doesn't notify the bot when the operator closes the session.
+    b24_operator_ttl_minutes: int = Field(default=720)
 
     def __post_init__(self):
         """Ensure directories exist."""
