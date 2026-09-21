@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     claude_cli_max_concurrent: int = Field(default=4)
     claude_cli_slots_dir: Path = Field(default=Path("/tmp/teplodar_claude_slots"))
 
+    # Bitrix24 — chat-bot in an Open Line (see BITRIX24.md).
+    # Envelope secret sent as auth[application_token] in every webhook event;
+    # empty = webhook rejects everything with 503 (fail closed).
+    b24_application_token: str = Field(default="")
+    # id of the bot registered by the Б24 developer (data[bot][id]); needed for
+    # imbot.v2.Chat.Message.send in stage 2.
+    b24_bot_id: int = Field(default=0)
+
     def __post_init__(self):
         """Ensure directories exist."""
         self.database_path.parent.mkdir(parents=True, exist_ok=True)

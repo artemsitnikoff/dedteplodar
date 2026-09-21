@@ -24,6 +24,7 @@ git clone <repo> teplodarbot
 cd teplodarbot
 cp .env.example .env
 nano .env   # минимум: BOT_TOKEN, OPERATOR_CHAT_ID, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_REFRESH_TOKEN
+            # Bitrix24 (если включаем вебхук): B24_APPLICATION_TOKEN, B24_BOT_ID — см. BITRIX24.md
 ```
 
 ### 2. Перенести базу знаний с Mac (папка base/)
@@ -68,6 +69,7 @@ docker compose up -d --build
 
 ```bash
 curl localhost:8001/health
+curl localhost:8001/api/v1/b24/events   # вебхук Bitrix24, без auth → {"ok":true,...}
 docker compose logs -f bot
 docker compose logs -f admin
 ```

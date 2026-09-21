@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router, synonyms as synonyms_router, chat as chat_router
+from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router, synonyms as synonyms_router, chat as chat_router, b24 as b24_router
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 _ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 _ADMIN_PASS = os.getenv("ADMIN_PASS", "")
 _AUTH_FREE_PATHS = {"/health"}
-_AUTH_FREE_PREFIXES = ("/assets/", "/vite.svg", "/favicon.ico")
+# /api/v1/b24/ is the Bitrix24 webhook: Bitrix can't send our basic-auth, the
+# route authenticates itself via auth[application_token] (admin/routers/b24.py).
+_AUTH_FREE_PREFIXES = ("/assets/", "/vite.svg", "/favicon.ico", "/api/v1/b24/")
 
 
 @asynccontextmanager
@@ -125,6 +127,7 @@ app.include_router(faq_entries.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
 app.include_router(synonyms_router.router, prefix="/api/v1")
 app.include_router(chat_router.router, prefix="/api/v1")
+app.include_router(b24_router.router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -182,6 +182,16 @@ Reliability:
 - **Streaming UX** — фейковый, ждём перехода на API mode для реальных deltas. См. секцию Claude CLI auth выше.
 - **Cross-container slot pool в Docker** — `bot` и `admin` это РАЗНЫЕ контейнеры с разным `/tmp`, поэтому slot pool каждый сам себе. До 8 одновременных CLI subprocess под нагрузкой. Фикс — общий named volume на `/tmp/teplodar_claude_slots` в `docker-compose.yml`. Не сделано пока трафик не вырос.
 
+## Bitrix24 — бот как первая линия поддержки (в работе)
+
+Следующий канал вопросов после Telegram и веб-чата: чат-бот в Открытой линии Bitrix24, события
+приходят вебхуком (`ONIMBOTV2MESSAGEADD`, form-urlencoded POST), ответ — REST от имени бота,
+эскалация на оператора через `imopenlines.bot.session.operator/transfer`. **Весь справочник —
+`BITRIX24.md`** (формат событий с реального перехвата, методы ответа, BBCode, кнопки, план эндпоинта,
+открытые вопросы). В коде — этап 1: `POST /api/v1/b24/events` (`admin/routers/b24.py`, парсер/верификация в
+`src/b24/webhook.py`, без basic-auth, `B24_APPLICATION_TOKEN` в `.env`), только принимает и логирует.
+Тесты: `PYTHONPATH=. pytest tests/ -q`. Стенд: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`.
+
 ## Что осталось / возможные дальнейшие правки
 
 - Cross-container slot pool (общий volume в `docker-compose.yml`) — когда трафик вырастет.
