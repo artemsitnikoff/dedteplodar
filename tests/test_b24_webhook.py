@@ -1,13 +1,7 @@
 """Bitrix24 webhook: parser + route. Run: PYTHONPATH=. pytest tests/ -q"""
 from __future__ import annotations
 
-import os
-import tempfile
 from urllib.parse import urlencode
-
-# Must be set before `admin.main` is imported (settings read env at import).
-os.environ.setdefault("ADMIN_PASS", "test")
-os.environ.setdefault("DATABASE_PATH", os.path.join(tempfile.mkdtemp(), "test.db"))
 
 import pytest
 from fastapi.testclient import TestClient
@@ -134,9 +128,14 @@ def test_mask_secrets():
 @pytest.fixture()
 def client(monkeypatch):
     from admin.main import app
+    from admin.routers import b24 as b24_router
     from src.core.config import settings
     monkeypatch.setattr(settings, "b24_application_token", APP_TOKEN)
-    return TestClient(app)  # no lifespan → no DB probe / model warm-up
+    spawned = []
+    monkeypatch.setattr(b24_router, "spawn_handle_event", lambda ev: spawned.append(ev))
+    c = TestClient(app)  # no lifespan → no DB probe / model warm-up
+    c.spawned = spawned
+    return c
 
 
 FORM = {"content-type": "application/x-www-form-urlencoded"}
@@ -145,6 +144,12 @@ FORM = {"content-type": "application/x-www-form-urlencoded"}
 def test_route_accepts_valid_event_without_basic_auth(client):
     r = client.post("/api/v1/b24/events", content=encode(message_add_payload()), headers=FORM)
     assert r.status_code == 200 and r.json() == {"ok": True}
+    assert len(client.spawned) == 1 and client.spawned[0].chat_id == 19167
+
+
+def test_route_does_not_spawn_for_non_line_chat(client):
+    r = client.post("/api/v1/b24/events", content=encode(message_add_payload(**{"data.chat.entityType": ""})), headers=FORM)
+    assert r.status_code == 200 and client.spawned == []
 
 
 def test_route_probe_get(client):

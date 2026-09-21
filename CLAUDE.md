@@ -188,9 +188,12 @@ Reliability:
 приходят вебхуком (`ONIMBOTV2MESSAGEADD`, form-urlencoded POST), ответ — REST от имени бота,
 эскалация на оператора через `imopenlines.bot.session.operator/transfer`. **Весь справочник —
 `BITRIX24.md`** (формат событий с реального перехвата, методы ответа, BBCode, кнопки, план эндпоинта,
-открытые вопросы). В коде — этап 1: `POST /api/v1/b24/events` (`admin/routers/b24.py`, парсер/верификация в
-`src/b24/webhook.py`, без basic-auth, `B24_APPLICATION_TOKEN` в `.env`), только принимает и логирует.
-Тесты: `PYTHONPATH=. pytest tests/ -q`. Стенд: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`.
+открытые вопросы). В коде (ветка `bitrix24`): этап 1 — `POST /api/v1/b24/events` (`admin/routers/b24.py`,
+парсер/верификация `src/b24/webhook.py`, без basic-auth, `B24_APPLICATION_TOKEN` в `.env`); этап 2 — фоновый
+ответ `admin/services/b24_service.py` (плейсхолдер → `answer_with_meta` → журнал → правка в ответ + кнопка
+«Позвать оператора»), REST `src/b24/client.py`, HTML→BBCode `src/b24/format.py`. ⚠️ `b24_service` не должен
+импортировать `src.rag.*` на уровне модуля — иначе admin потянет torch при старте роутера. Judge веб-чата и Б24
+общий: `admin/services/judge_service.py`. Тесты: `PYTHONPATH=. pytest tests/ -q`. Стенд: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`.
 
 ## Что осталось / возможные дальнейшие правки
 

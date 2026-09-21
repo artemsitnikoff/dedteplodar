@@ -18,6 +18,7 @@ const QTYPE_CLASSES = {
   FAQ_DEALER: 'qt-dealer',
   FAQ_EXACT: 'qt-faq',
   ERROR: 'qt-error',
+  OPERATOR: 'qt-error',
 }
 
 const QTYPE_LABELS = {
@@ -26,6 +27,7 @@ const QTYPE_LABELS = {
   FAQ_DEALER: 'Дилер',
   FAQ_EXACT: 'FAQ',
   ERROR: 'Ошибка',
+  OPERATOR: 'Оператор',
 }
 
 export function categoryBadgeClass(category) {

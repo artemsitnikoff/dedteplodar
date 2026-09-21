@@ -18,14 +18,11 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from sqlalchemy import update
 
 from admin.schemas.chat import ChatFeedbackRequest, ChatRequest
 from admin.services.eval_service import get_eval_generator
-from src.core.config import settings
+from admin.services.judge_service import spawn_judge
 from src.core.database import SessionLocal
-from src.eval.judge import judge_answer
-from src.logs.models import QueryLog
 from src.logs.queries import save_query_log, set_feedback
 
 logger = logging.getLogger(__name__)
@@ -36,20 +33,6 @@ _FALLBACK_TEXT = (
     "Извините, не удалось получить ответ. Попробуйте ещё раз или позвоните нам: "
     "<b>8 800 775-03-07</b> (бесплатно, ежедневно 10:00–21:00 МСК)."
 )
-
-# Background LLM-judge — same bounded-concurrency pattern as the bot so a
-# traffic spike doesn't fan out into N parallel Claude CLI subprocesses.
-# Lazily inited (no running loop at import time).
-_judge_semaphore: asyncio.Semaphore | None = None
-_background_tasks: set[asyncio.Task] = set()
-
-
-def _get_judge_semaphore() -> asyncio.Semaphore:
-    global _judge_semaphore
-    if _judge_semaphore is None:
-        _judge_semaphore = asyncio.Semaphore(2)
-    return _judge_semaphore
-
 
 def _sse(obj: dict) -> str:
     """Frame a dict as one Server-Sent Event line."""
@@ -72,41 +55,9 @@ def _meta_dict(meta) -> dict:
     }
 
 
-async def _judge_in_background(log_id: int, question: str, answer: str) -> None:
-    """Score answer usefulness after the user already has it. Best-effort.
-
-    Targeted UPDATE of only usefulness_* so a concurrent feedback write on
-    the same row isn't clobbered (mirrors consultant._judge_in_background).
-    """
-    try:
-        async with _get_judge_semaphore():
-            verdict = await asyncio.to_thread(
-                judge_answer, question, answer,
-                settings.claude_cli_path,
-                settings.claude_reformulation_model,  # Haiku — fast judge
-            )
-            if not verdict:
-                return
-            with SessionLocal() as s:
-                s.execute(
-                    update(QueryLog)
-                    .where(QueryLog.id == log_id)
-                    .values(
-                        usefulness_score=verdict["score"],
-                        usefulness_verdict=verdict["verdict"],
-                    )
-                )
-                s.commit()
-        logger.info("[chat] judge log=%s score=%d", log_id, verdict["score"])
-    except Exception as e:
-        logger.warning("[chat] background judge failed for log=%s: %s", log_id, e)
-
-
 def _spawn_judge(log_id: int, question: str, answer: str) -> None:
-    # Strong-ref the task so the GC doesn't drop it before completion.
-    task = asyncio.create_task(_judge_in_background(log_id, question, answer))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    # Shared bounded-concurrency judge (admin/services/judge_service.py).
+    spawn_judge(log_id, question, answer, tag="chat")
 
 
 @router.post("/stream")

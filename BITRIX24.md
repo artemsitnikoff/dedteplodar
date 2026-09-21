@@ -3,12 +3,20 @@
 Справочник по работе с Bitrix24 (Б24) для этого проекта. Собран из официальной документации
 (ссылки в конце) и из реального перехваченного запроса. Цель — не ходить по URL каждый раз.
 
-**Статус на 2026-09-21:** реализован **этап 1** — приём вебхука: `POST /api/v1/b24/events`
-(`admin/routers/b24.py` + `src/b24/webhook.py`, тесты в `tests/test_b24_webhook.py`). Проверяет
-`application_token`, разбирает form-urlencoded, логирует событие, отвечает 200. **Клиенту пока не
-отвечает.** Этапы 2–3 (ответ в чат, эскалация) — по плану в §10. Разработчик Б24 со своей стороны
-уже зарегистрировал бота и тестовую линию; после деплоя ему нужно переключить `webhookUrl` на
-`http://5.253.228.164:8001/api/v1/b24/events` (HTTPS — см. §2).
+**Статус на 2026-09-21:** реализованы **этапы 1–2** (ветка `bitrix24`, в `main` не влито, на стенд не выкачено).
+- Этап 1 — приём вебхука: `POST /api/v1/b24/events` (`admin/routers/b24.py`, парсер/верификация
+  `src/b24/webhook.py`). Проверяет `application_token`, разбирает form-urlencoded, отвечает 200.
+- Этап 2 — ответ клиенту: `admin/services/b24_service.py` (фон после 200: дедуп → плейсхолдер «ищу ответ» →
+  `answer_with_meta` → журнал → правка плейсхолдера в ответ + кнопка «Позвать оператора»),
+  REST-клиент `src/b24/client.py`, конвертер HTML→BBCode `src/b24/format.py`. Кнопка/слова «оператор»
+  пока дают заглушку с телефонами — настоящая передача в этапе 3.
+- Тесты: `PYTHONPATH=. pytest tests/ -q` (50 кейсов на реальной форме события).
+- **Не проверено на живом портале:** регистр ключей клавиатуры (`fields.keyboard` + `TEXT/ACTION/...`),
+  поведение `imbot.v2.Chat.Message.update` в чате линии, что `ACTION: SEND` приходит как `ONIMBOTV2MESSAGEADD`.
+  Проверять первым делом после деплоя.
+
+Разработчик Б24 со своей стороны уже зарегистрировал бота и тестовую линию; после деплоя ему нужно
+переключить `webhookUrl` на `http://5.253.228.164:8001/api/v1/b24/events` (HTTPS — см. §2).
 
 ---
 
@@ -319,21 +327,24 @@ claude mcp add --transport http bitrix24-docs https://mcp-dev.bitrix24.tech/mcp
    токен не задан → 503 (fail closed).
 3. ✅ **Разбор** form-urlencoded во вложенный dict (`src/b24/webhook.py:parse_php_form`) и типизация в
    `B24Event`; `B24Event.should_answer` = `ONIMBOTV2MESSAGEADD` + `entityType == LINES` + автор не бот + непустой текст.
-4. **Дедуп** по `data.message.id` (LRU/таблица), т.к. повторы приходят.
-5. **Ответ 200 сразу**, работа — в `BackgroundTasks` / `asyncio.create_task`.
+4. ✅ **Дедуп** по `data.message.id` (LRU 2000 в `b24_service.mark_seen`), т.к. повторы приходят.
+5. ✅ **Ответ 200 сразу**, работа — `asyncio.create_task` со strong-ref (`spawn_handle_event`).
 6. **Состояние сессии** (новая таблица SQLite, ключ `chat_id`): `bot | handoff_pending | operator | closed`.
    Если `operator` — бот молчит. Сейчас бот stateless, это новое.
-7. **Генерация**: `history` — последние ходы этого `chat_id` из `query_logs` (как веб-чат
-   передаёт свою историю); `on_phase` не нужен (в Б24 нечего анимировать). Опционально сразу
-   отправить «Секунду, ищу…» — клиент 30–40 с ничего не видит.
-8. **Конвертация** HTML → BBCode (§5), отправка `imbot.v2.Chat.Message.send` с кнопкой
-   «Позвать оператора» (`ACTION: SEND`).
+7. ✅ **Генерация**: `answer_with_meta(session, text, user_id=synthetic)` — история подтягивается из
+   `query_logs` по синтетическому `user_id` (ключ — `chat_id`, окно 30 мин как у Telegram). Сразу шлётся
+   плейсхолдер «Секунду, ищу ответ…», затем он редактируется в ответ (`imbot.v2.Chat.Message.update`);
+   если правка не удалась — новое сообщение.
+8. ✅ **Конвертация** HTML → BBCode (`src/b24/format.py`, §5), кнопка «Позвать оператора» (`ACTION: SEND`,
+   `b24_service.operator_keyboard`).
 9. **Эскалация** → `imopenlines.bot.session.operator` (или `transfer` в очередь, если Б24 скажут id).
    Триггеры: текст кнопки/«оператор»/«человек»; intent личного заказа (уже есть правило в
    `intent_extractor`); нет чанков / низкий `top_score`; N-й 👎 или переспрос. Перед передачей —
    отправить оператору сводку (транскрипт + категория) сообщением в чат, чтобы клиент не повторялся.
-10. **Журнал**: писать в `query_logs` с синтетическим отрицательным `user_id` от `b24:<user_id>`
-    (по аналогии с `web:<short>`), `username = "b24:<chat_id>"`; фоновый judge как у бота.
+10. ✅ **Журнал**: `query_logs` с `user_id = synthetic_user_id("b24:chat<chat_id>")`,
+    `username = "b24:<имя>#<user_id>"`, `bot_message_id` = id плейсхолдера; judge через общий
+    `admin/services/judge_service.py` (туда же переехал judge веб-чата). Запрос оператора пишется как
+    `query_type = OPERATOR`.
 11. ✅(частично) **Env**: `B24_APPLICATION_TOKEN`, `B24_BOT_ID=511` — уже в `config.py`/`.env.example`; опц. `B24_OPERATOR_QUEUE_ID` / `B24_OPERATOR_USER_ID`,
     `B24_PUBLIC_URL` (для документации/логов). `client_endpoint` и `access_token` берём из события.
 12. **Инфра**: домен + nginx + HTTPS перед 8001; после этого попросить Б24 обновить `webhookUrl`

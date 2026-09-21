@@ -30,6 +30,7 @@ _QTYPE_LABEL = {
     "FAQ_COMPANY": "О компании",
     "FAQ_DEALER": "Дилер",
     "ERROR": "Ошибка",
+    "OPERATOR": "Оператор",  # Bitrix24: клиент попросил человека
 }
 _FEEDBACK_LABEL = {
     "good": "👍 Полезно",

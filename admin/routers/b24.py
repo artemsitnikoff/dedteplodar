@@ -1,6 +1,7 @@
 """Bitrix24 webhook — entry point for client questions from an Open Line chat.
 
-Stage 1 (this file): receive, verify, parse, log, ack. No reply yet.
+Receive, verify, parse, log, ack — then hand the event to
+`admin.services.b24_service.handle_event` in the background (stage 2).
 Bitrix24 expects a fast HTTP 200 and does not guarantee redelivery, so the
 handler must never block on the RAG pipeline; the answer will be produced in
 a background task and delivered with a separate REST call (see BITRIX24.md §10).
@@ -17,6 +18,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from admin.services.b24_service import spawn_handle_event
 from src.b24.webhook import B24Event, mask_secrets, parse_php_form, verify_application_token
 from src.core.config import settings
 
@@ -75,5 +77,6 @@ async def events(request: Request):
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[b24] payload=%s", json.dumps(mask_secrets(payload), ensure_ascii=False))
 
-    # Stage 2 will hand `ev` to a background task here (RAG → reply via REST).
+    if ev.should_answer:
+        spawn_handle_event(ev)
     return {"ok": True}
