@@ -14,6 +14,14 @@ from fastapi.staticfiles import StaticFiles
 
 from admin.routers import products, categories, documents, chunks, faq, pipeline, query_logs, faq_entries, eval as eval_router, synonyms as synonyms_router, chat as chat_router, b24 as b24_router
 
+# No handler is configured otherwise → Python's last-resort handler prints
+# WARNING+ only, and every INFO line ([b24] flow, [timing], chat) is lost.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── HTTP Basic auth on every request (except static assets and health) ───────────────────
