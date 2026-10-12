@@ -10,6 +10,7 @@ payload in BITRIX24.md (appendix A).
 """
 from __future__ import annotations
 
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,15 @@ EVENT_MESSAGE_ADD = "ONIMBOTV2MESSAGEADD"
 EVENT_COMMAND_ADD = "ONIMBOTV2COMMANDADD"
 EVENT_JOIN_CHAT = "ONIMBOTV2JOINCHAT"
 ENTITY_TYPE_OPEN_LINES = "LINES"
+
+# Wazzup (the WhatsApp/Max connector) copies into the Open Line what a manager
+# typed on the company phone, and its own notices — authored by the *client*
+# user, told apart only by a marker line (seen on the live portal 2026-10-08):
+#   "=== Исходящее сообщение, автор: Телефон ===\n<manager's text>"
+#   "=== SYSTEM WZ === Пропущенный звонок от клиента."
+# A reply with a quote puts ">>quoted\n \n \n" in front, hence MULTILINE.
+_WZ_OUTGOING_RE = re.compile(r"^===\s*Исходящее сообщение\b", re.MULTILINE)
+_WZ_SYSTEM_RE = re.compile(r"^===\s*SYSTEM WZ\s*===", re.MULTILINE)
 
 
 def parse_php_form(body: bytes | str) -> dict[str, Any]:
@@ -114,6 +124,7 @@ class B24Event:
     user_id: int | None
     user_name: str
     author_is_bot: bool
+    author_is_employee: bool
     language: str
 
     @property
@@ -129,12 +140,35 @@ class B24Event:
         return self.entity_type == ENTITY_TYPE_OPEN_LINES
 
     @property
-    def should_answer(self) -> bool:
-        """A client text in an Open Line chat, not authored by a bot."""
+    def is_outgoing_echo(self) -> bool:
+        """A manager's message sent from the company phone, echoed by Wazzup as the client's."""
+        return bool(_WZ_OUTGOING_RE.search(self.text))
+
+    @property
+    def is_connector_notice(self) -> bool:
+        """A Wazzup service line («Пропущенный звонок от клиента») — nobody to answer."""
+        return bool(_WZ_SYSTEM_RE.search(self.text))
+
+    @property
+    def is_staff_message(self) -> bool:
+        """A person on our side spoke in the Open Line: an employee in Bitrix24 or a
+        manager from the phone. The dialog is in human hands from here on."""
         return (
             self.is_message
             and self.is_open_line
             and not self.author_is_bot
+            and (self.author_is_employee or self.is_outgoing_echo)
+        )
+
+    @property
+    def should_answer(self) -> bool:
+        """A client text in an Open Line chat — not a bot, staff or connector notice."""
+        return (
+            self.is_message
+            and self.is_open_line
+            and not self.author_is_bot
+            and not self.is_staff_message
+            and not self.is_connector_notice
             and bool(self.text.strip())
         )
 
@@ -165,5 +199,8 @@ class B24Event:
                 p for p in (user.get("firstName"), user.get("lastName")) if p
             ) or str(user.get("name") or ""),
             author_is_bot=str(user.get("bot") or "0") == "1",
+            # Open Line clients are connector users (connector=1, externalAuthId=imconnector);
+            # only an explicit "0" marks an employee, so a payload without the flag still gets answered.
+            author_is_employee=str(user.get("connector", "1")) == "0",
             language=str(data.get("language") or ""),
         )

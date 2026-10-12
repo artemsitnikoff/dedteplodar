@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     # Safety net: "operator" state expires after this long, since Bitrix
     # doesn't notify the bot when the operator closes the session.
     b24_operator_ttl_minutes: int = Field(default=720)
+    # Messenger clients split one question into several messages: wait this
+    # long after the last one and answer them together.
+    b24_debounce_seconds: float = Field(default=6.0)
 
     def __post_init__(self):
         """Ensure directories exist."""

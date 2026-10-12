@@ -50,7 +50,8 @@ def message_add_payload(**overrides) -> dict:
                 "entityType": "LINES", "entityId": "livechat|13|19165|515",
                 "name": "Синий гость №7 - Demo онлайн чат с AI ботом",
             },
-            "user": {"id": "515", "name": "Гость", "firstName": "Гость", "lastName": "", "bot": "0"},
+            "user": {"id": "515", "name": "Гость", "firstName": "Гость", "lastName": "", "bot": "0",
+                     "connector": "1", "externalAuthId": "imconnector"},
             "language": "ru",
         },
         "ts": "1789545901",
@@ -100,10 +101,29 @@ def test_event_from_real_shape():
     ({"data.user.bot": "1"}, False),                # authored by a bot
     ({"data.message.text": "   "}, False),          # empty text
     ({"event": "ONIMBOTV2JOINCHAT"}, False),        # not a message
+    ({"data.user.connector": "0"}, False),          # an employee wrote in the Open Line
+    ({"data.message.text": "=== Исходящее сообщение, автор: Телефон ===\nЗдравствуйте!"}, False),  # Wazzup echo
+    ({"data.message.text": "=== SYSTEM WZ === Пропущенный звонок от клиента."}, False),          # Wazzup notice
+    ({"data.message.text": ">>Хорошо, заказ отменяем.\n \n \n👍"}, True),  # client's reply with a quote
+    ({"data.message.text": "что значит === Исходящее сообщение?"}, True),   # marker not at a line start
     ({}, True),
 ])
 def test_should_answer(override, expect):
     assert B24Event.from_payload(message_add_payload(**override)).should_answer is expect
+
+
+def test_staff_message_kinds():
+    echo = B24Event.from_payload(message_add_payload(**{
+        "data.message.text": ">>Нашел\n \n \n=== Исходящее сообщение, автор: Телефон ===\nВерону?"}))
+    assert echo.is_outgoing_echo and echo.is_staff_message and not echo.author_is_employee
+    employee = B24Event.from_payload(message_add_payload(**{"data.user.connector": "0"}))
+    assert employee.author_is_employee and employee.is_staff_message
+    notice = B24Event.from_payload(message_add_payload(**{"data.message.text": "=== SYSTEM WZ === Пропущенный звонок"}))
+    assert notice.is_connector_notice and not notice.is_staff_message and not notice.should_answer
+    # a payload without the connector flag is treated as a client (keeps answering)
+    p = message_add_payload()
+    del p["data"]["user"]["connector"]
+    assert B24Event.from_payload(p).should_answer
 
 
 def test_verify_application_token():
@@ -183,3 +203,12 @@ def test_route_spawns_for_join_chat(client):
     join = message_add_payload(**{"event": "ONIMBOTV2JOINCHAT", "data.message.text": ""})
     r = client.post("/api/v1/b24/events", content=encode(join), headers=FORM)
     assert r.status_code == 200 and len(client.spawned) == 1 and client.spawned[0].is_join
+
+
+def test_route_spawns_for_staff_message_but_not_connector_notice(client):
+    echo = message_add_payload(**{"data.message.text": "=== Исходящее сообщение, автор: Телефон ===\nЗдравствуйте!"})
+    notice = message_add_payload(**{"data.message.id": "2", "data.message.text": "=== SYSTEM WZ === Пропущенный звонок от клиента."})
+    for p in (echo, notice):
+        assert client.post("/api/v1/b24/events", content=encode(p), headers=FORM).status_code == 200
+    # the echo still reaches the service (it silences the bot there); the notice is dropped
+    assert [ev.is_staff_message for ev in client.spawned] == [True]

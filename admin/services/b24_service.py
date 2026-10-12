@@ -5,14 +5,21 @@ Runs *after* the webhook has already returned 200 (Bitrix24 wants a fast ack
 and does not guarantee redelivery). Flow per ONIMBOTV2MESSAGEADD:
 
   1. dedup by message id (paired deliveries were seen in the wild)
-  2. session state (src/b24/sessions.py): if an operator has the dialog →
+  2. a person on our side spoke (employee in Bitrix24, or a manager on the
+     company phone echoed by Wazzup) → the dialog is theirs, bot goes silent
+  3. session state (src/b24/sessions.py): if an operator has the dialog →
      stay silent; a new Open Line session on the same chat → bot again
-  3. escalation before RAG: "Позвать оператора" button / "оператор…" /
+  4. escalation before RAG: "Позвать оператора" button / "оператор…" /
      personal-order phrases ("мой заказ", "рекламация"…) → transfer
-  4. otherwise: placeholder ("ищу ответ…") → answer_with_meta() in a worker
-     thread (history from query_logs by the synthetic user id keyed on the
-     chat) → query_logs → edit the placeholder into the answer + button
-  5. N consecutive generation errors → transfer as well
+  5. otherwise the message joins the chat's queue: messenger clients split
+     one thought into several messages, so the bot waits until the client
+     pauses (B24_DEBOUNCE_SECONDS) and answers them together; one answer at
+     a time per chat, so the next one sees the previous turn in history
+  6. answer_with_meta() in a worker thread (history from query_logs by the
+     synthetic user id keyed on the chat) → one message with the answer +
+     button → query_logs. No "ищу ответ…" placeholder: connectors (Wazzup →
+     WhatsApp/Max) don't relay edits, so the client would see only that.
+  7. N consecutive generation errors → transfer as well
 
 ONIMBOTV2JOINCHAT resets the dialog to `bot` (Bitrix re-attaches the bot at
 the start of a new session).
@@ -24,6 +31,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 
 from admin.services.eval_service import get_eval_generator
@@ -40,10 +48,9 @@ from src.logs.queries import save_query_log, set_feedback, synthetic_user_id
 logger = logging.getLogger(__name__)
 
 OPERATOR_REQUEST_TEXT = "Позвать оператора"
-PLACEHOLDER_TEXT = "Секунду, ищу ответ в базе знаний…"
 _HOTLINE = (
-    "[b]8 800 775-03-07[/b] (бесплатно, ежедн. 10:00–21:00 МСК)\n"
-    "[b]8 800 101-43-53[/b] — интернет-магазин (ежедн. 9:00–20:00 МСК)"
+    "[b]8 800 775-03-07[/b] (бесплатно, ежедн. 10:00–21:00 НСК)\n"
+    "[b]8 800 101-43-53[/b] — интернет-магазин (ежедн. 9:00–20:00 НСК)"
 )
 FALLBACK_TEXT = (
     "Извините, не удалось получить ответ. Попробуйте ещё раз или позвоните нам:\n" + _HOTLINE
@@ -101,10 +108,22 @@ REASON_REQUESTED = "requested"
 REASON_PERSONAL_ORDER = "personal_order"
 REASON_ERRORS = "consecutive_errors"
 REASON_INTENT = "intent_needs_human"
+REASON_STAFF = "staff_replied"
 
 _SEEN_MAX = 2000
 _seen_message_ids: "OrderedDict[int, None]" = OrderedDict()
 _background_tasks: set[asyncio.Task] = set()
+
+
+@dataclass(slots=True)
+class _ChatQueue:
+    """Client messages waiting for one combined answer, and the task answering them."""
+    events: list[B24Event] = field(default_factory=list)
+    last_at: float = 0.0
+    task: asyncio.Task | None = None
+
+
+_queues: dict[int, _ChatQueue] = {}
 
 
 def _error_meta():
@@ -204,6 +223,13 @@ async def handle_event(ev: B24Event) -> None:
         return
 
     state = sessions.touch(ev, operator_ttl_minutes=settings.b24_operator_ttl_minutes)
+    if ev.is_staff_message:
+        # No transfer call: the person is already talking to the client. Each
+        # staff message also restarts the operator TTL.
+        sessions.mark_handoff(ev.chat_id, REASON_STAFF)
+        logger.info("[b24] chat=%s staff replied (%s) — bot goes silent",
+                    ev.chat_id, "employee" if ev.author_is_employee else "phone via connector")
+        return
     if state.status == STATUS_OPERATOR:
         logger.info("[b24] chat=%s is with an operator (%s) — bot stays silent", ev.chat_id, state.handoff_reason)
         return
@@ -216,6 +242,8 @@ async def handle_event(ev: B24Event) -> None:
         logger.error("[b24] cannot build REST client for chat=%s: %s", ev.chat_id, e)
         return
 
+    # Escalation is per message and immediate; whatever is still queued for
+    # this chat is then left to the operator (see _answer's status check).
     if is_operator_request(ev.text):
         await escalate(ev, client, bot_id, REASON_REQUESTED, user_id, username)
         return
@@ -223,9 +251,51 @@ async def handle_event(ev: B24Event) -> None:
         await escalate(ev, client, bot_id, REASON_PERSONAL_ORDER, user_id, username)
         return
 
-    t0 = time.monotonic()
-    placeholder_id = await _safe_send(client, bot_id, ev.dialog_id, PLACEHOLDER_TEXT)
+    _enqueue(ev)
 
+
+def _enqueue(ev: B24Event) -> None:
+    q = _queues.setdefault(ev.chat_id, _ChatQueue())
+    q.events.append(ev)
+    q.last_at = time.monotonic()
+    if q.task is None:
+        q.task = asyncio.create_task(_drain_chat(ev.chat_id, q))
+
+
+async def _drain_chat(chat_id: int, q: _ChatQueue) -> None:
+    """Answer a chat's queue: wait for a pause, answer everything gathered,
+    repeat while messages keep coming (including those sent mid-generation)."""
+    try:
+        while q.events:
+            while (wait := q.last_at + settings.b24_debounce_seconds - time.monotonic()) > 0:
+                await asyncio.sleep(wait)
+            batch, q.events = q.events, []
+            try:
+                await _answer(batch)
+            except Exception:
+                logger.exception("[b24] chat=%s: answering %d message(s) failed", chat_id, len(batch))
+    finally:
+        q.task = None
+        if _queues.get(chat_id) is q and not q.events:
+            del _queues[chat_id]
+
+
+async def _answer(batch: list[B24Event]) -> None:
+    # The newest event carries the freshest access_token.
+    ev = batch[-1]
+    if len(batch) > 1:
+        ev = replace(ev, text="\n".join(e.text.strip() for e in batch))
+    if sessions.get_status(ev.chat_id) == STATUS_OPERATOR:
+        logger.info("[b24] chat=%s went to a human before the answer — %d queued message(s) left to them",
+                    ev.chat_id, len(batch))
+        return
+    if len(batch) > 1:
+        logger.info("[b24] chat=%s: %d messages answered together", ev.chat_id, len(batch))
+
+    bot_id = ev.bot_id or settings.b24_bot_id
+    user_id, username = journal_identity(ev)
+    client = B24Client(ev.client_endpoint, ev.access_token)
+    t0 = time.monotonic()
     try:
         generator = await get_eval_generator()
 
@@ -238,14 +308,24 @@ async def handle_event(ev: B24Event) -> None:
         logger.error("[b24] answer generation failed chat=%s: %s", ev.chat_id, e, exc_info=True)
         answer_html, meta = FALLBACK_TEXT, _error_meta()
 
+    if sessions.get_status(ev.chat_id) == STATUS_OPERATOR:
+        # A manager stepped in (or the client asked for one) during the 10–60 s
+        # of generation — a late bot answer would talk over them.
+        logger.info("[b24] chat=%s taken over while generating — answer dropped", ev.chat_id)
+        return
+
     is_error = meta.query_type == "ERROR"
     if getattr(meta, "needs_human", False) and not is_error:
         # Layer 2: Haiku read the question as "wants a person / own-order
-        # complaint". The generated answer is not delivered — the placeholder
-        # becomes the handoff message instead.
+        # complaint". The generated answer is not delivered — the client gets
+        # the handoff message instead.
         logger.info("[b24] intent needs_human chat=%s — handing off (unsent answer: %r)", ev.chat_id, answer_html[:200])
-        await escalate(ev, client, bot_id, REASON_INTENT, user_id, username, placeholder_id=placeholder_id)
+        await escalate(ev, client, bot_id, REASON_INTENT, user_id, username)
         return
+
+    text = answer_html if is_error else html_to_bbcode(answer_html)
+    message_id = await _safe_send(client, bot_id, ev.dialog_id, text, operator_keyboard())
+    delivered = message_id is not None
 
     log_id = save_query_log(
         question=ev.text,
@@ -257,23 +337,15 @@ async def handle_event(ev: B24Event) -> None:
         chunks_used=meta.chunks_used,
         city=meta.city,
         reformulated_query=meta.reformulated_query,
-        bot_message_id=placeholder_id,
+        bot_message_id=message_id,
     )
     if log_id and answer_html and not is_error:
         spawn_judge(log_id, ev.text, answer_html, tag="b24")
 
-    text = answer_html if is_error else html_to_bbcode(answer_html)
-    keyboard = operator_keyboard()
-    delivered = False
-    if placeholder_id:
-        delivered = await _safe_update(client, bot_id, placeholder_id, text, keyboard)
-    if not delivered:
-        delivered = (await _safe_send(client, bot_id, ev.dialog_id, text, keyboard)) is not None
-
     errors = sessions.mark_bot_turn(ev.chat_id, error=is_error)
     logger.info(
-        "[b24] answered chat=%s log=%s type=%s delivered=%s via=%s total=%dms (intent=%s ret=%s ans=%s model=%s)",
-        ev.chat_id, log_id, meta.query_type, delivered, "update" if placeholder_id and delivered else "send",
+        "[b24] answered chat=%s log=%s type=%s delivered=%s total=%dms (intent=%s ret=%s ans=%s model=%s)",
+        ev.chat_id, log_id, meta.query_type, delivered,
         int((time.monotonic() - t0) * 1000),
         meta.t_intent_ms, meta.t_retrieval_ms, meta.t_answer_ms, meta.t_answer_model,
     )
@@ -291,13 +363,11 @@ async def escalate(
     username: str,
     *,
     log_turn: bool = True,
-    placeholder_id: int | None = None,
 ) -> bool:
     """Tell the client, hand the Open Line dialog to a human, remember it.
 
-    Returns True if Bitrix accepted the transfer. On failure the client gets
-    the hotline instead and the dialog stays with the bot. If a placeholder
-    message is already on screen, it is edited into the handoff text.
+    Returns True if Bitrix accepted the transfer. On failure the client also
+    gets the hotline and the dialog stays with the bot.
     """
     if log_turn:
         log_id = save_query_log(
@@ -306,6 +376,9 @@ async def escalate(
         )
         set_feedback(log_id, "operator")  # shows up under the Journal's 🆘 filter like Telegram
 
+    # Say it before the transfer: once an operator picks the dialog up, the bot
+    # can lose write access to the chat (ACCESS_DENIED seen on the live portal).
+    await _safe_send(client, bot_id, ev.dialog_id, TRANSFER_TEXT)
     try:
         if settings.b24_transfer_to:
             ok = await client.session_transfer(ev.chat_id, settings.b24_transfer_to)
@@ -323,15 +396,11 @@ async def escalate(
         logger.error("[b24] transfer failed chat=%s reason=%s: %s", ev.chat_id, reason, e)
         ok = False
 
-    text = TRANSFER_TEXT if ok else TRANSFER_FAILED_TEXT
     if ok:
         sessions.mark_handoff(ev.chat_id, reason)
         logger.info("[b24] handed off chat=%s reason=%s user=%s", ev.chat_id, reason, username)
-    shown = False
-    if placeholder_id:
-        shown = await _safe_update(client, bot_id, placeholder_id, text, "N")
-    if not shown:
-        await _safe_send(client, bot_id, ev.dialog_id, text)
+    else:
+        await _safe_send(client, bot_id, ev.dialog_id, TRANSFER_FAILED_TEXT)
     return ok
 
 
@@ -341,11 +410,3 @@ async def _safe_send(client: B24Client, bot_id: int, dialog_id: str, text: str, 
     except Exception as e:
         logger.error("[b24] send_message failed dialog=%s: %s", dialog_id, e)
         return None
-
-
-async def _safe_update(client: B24Client, bot_id: int, message_id: int, text: str, keyboard=None) -> bool:
-    try:
-        return await client.update_message(bot_id, message_id, text, keyboard)
-    except Exception as e:
-        logger.warning("[b24] update_message failed msg=%s (falling back to send): %s", message_id, e)
-        return False

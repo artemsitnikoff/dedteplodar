@@ -6,8 +6,9 @@
 **Статус на 2026-09-21:** реализованы **этапы 1–3** (ветка `bitrix24`, в `main` не влито, на стенд не выкачено).
 - Этап 1 — приём вебхука: `POST /api/v1/b24/events` (`admin/routers/b24.py`, парсер/верификация
   `src/b24/webhook.py`). Проверяет `application_token`, разбирает form-urlencoded, отвечает 200.
-- Этап 2 — ответ клиенту: `admin/services/b24_service.py` (фон после 200: дедуп → плейсхолдер «ищу ответ» →
-  `answer_with_meta` → журнал → правка плейсхолдера в ответ + кнопка «Позвать оператора»),
+- Этап 2 — ответ клиенту: `admin/services/b24_service.py` (фон после 200: дедуп → сотрудник в диалоге? → молчим →
+  очередь чата: ждём паузу клиента, склеиваем сообщения → `answer_with_meta` → одно сообщение с ответом + кнопка
+  «Позвать оператора» → журнал; плейсхолдера нет, см. §10 п. 7),
   REST-клиент `src/b24/client.py`, конвертер HTML→BBCode `src/b24/format.py`.
 - Этап 3 — эскалация: таблица `b24_sessions` (`src/b24/models.py`, state-machine в `src/b24/sessions.py`),
   передача через `imopenlines.bot.session.operator` (или `.transfer`, если задан `B24_TRANSFER_TO`).
@@ -17,7 +18,7 @@
   истечёт TTL (`B24_OPERATOR_TTL_MINUTES`, 12 ч). Эскалация пишется в журнал как `OPERATOR` + `feedback=operator`.
 - Тесты: `PYTHONPATH=. pytest tests/ -q` (50 кейсов на реальной форме события).
 - **Не проверено на живом портале:** регистр ключей клавиатуры (`fields.keyboard` + `TEXT/ACTION/...`),
-  поведение `imbot.v2.Chat.Message.update` в чате линии, что `ACTION: SEND` приходит как `ONIMBOTV2MESSAGEADD`,
+  что `ACTION: SEND` приходит как `ONIMBOTV2MESSAGEADD`,
   что после `session.operator` бот перестаёт получать `MESSAGEADD` и что новая сессия линии приходит с новым
   `entityId`. Проверять первым делом после деплоя.
 
@@ -332,16 +333,35 @@ claude mcp add --transport http bitrix24-docs https://mcp-dev.bitrix24.tech/mcp
 2. ✅ **Проверка** `auth.application_token == settings.b24_application_token` (`compare_digest`) → иначе 403;
    токен не задан → 503 (fail closed).
 3. ✅ **Разбор** form-urlencoded во вложенный dict (`src/b24/webhook.py:parse_php_form`) и типизация в
-   `B24Event`; `B24Event.should_answer` = `ONIMBOTV2MESSAGEADD` + `entityType == LINES` + автор не бот + непустой текст.
+   `B24Event`; `B24Event.should_answer` = `ONIMBOTV2MESSAGEADD` + `entityType == LINES` + автор не бот, не сотрудник,
+   не эхо Wazzup + непустой текст.
 4. ✅ **Дедуп** по `data.message.id` (LRU 2000 в `b24_service.mark_seen`), т.к. повторы приходят.
+4a. ✅ **Сотрудник в диалоге → бот молчит** (`B24Event.is_staff_message`): `mark_handoff("staff_replied")` без
+   вызова transfer, каждое такое сообщение продлевает TTL. Два источника:
+   - сотрудник пишет в чате линии в Б24: `data.user.connector == "0"` (клиенты линий — `connector=1`,
+     `externalAuthId=imconnector`; без поля считаем клиентом);
+   - **Wazzup** (линии WA/Max, `entityId = wz_…|<line>|…`) дублирует в линию то, что менеджер написал **с телефона**,
+     причём **от имени клиента**, отличить можно только по строке-маркеру:
+     `=== Исходящее сообщение, автор: Телефон ===\n<текст>`. При ответе с цитатой перед ним стоит
+     `>>цитата\n \n \n`, поэтому маркер ищется в начале любой строки. Служебные `=== SYSTEM WZ === …`
+     («Пропущенный звонок от клиента») просто игнорируются. До фикса (2026-10-08) бот отвечал на реплики менеджера.
+   - если диалог ушёл человеку, пока бот генерировал (10–60 с), готовый ответ не отправляется.
 5. ✅ **Ответ 200 сразу**, работа — `asyncio.create_task` со strong-ref (`spawn_handle_event`).
 6. ✅ **Состояние сессии**: таблица `b24_sessions` (ключ `chat_id`): `bot | operator | closed`; хранит
    `line_session_id` из `entityId`, счётчики ходов/ошибок, причину и время передачи. Если `operator` — бот молчит.
    Возврат к `bot`: новый `line_session_id`, `ONIMBOTV2JOINCHAT`, TTL.
-7. ✅ **Генерация**: `answer_with_meta(session, text, user_id=synthetic)` — история подтягивается из
-   `query_logs` по синтетическому `user_id` (ключ — `chat_id`, окно 30 мин как у Telegram). Сразу шлётся
-   плейсхолдер «Секунду, ищу ответ…», затем он редактируется в ответ (`imbot.v2.Chat.Message.update`);
-   если правка не удалась — новое сообщение.
+7. ✅ **Очередь чата** (`b24_service._enqueue` / `_drain_chat`): клиенты мессенджеров дробят вопрос на несколько
+   сообщений («Сигнал КОВ-25…» + «есть такой?»; «У меня Каскад-18» + «хотел бы подобрать новую») — раньше каждое
+   получало свой ответ, параллельно и без контекста друг друга. Теперь бот ждёт `B24_DEBOUNCE_SECONDS` (6 с) после
+   последнего сообщения и отвечает **один раз** на склейку (`\n`), в журнал — склеенный вопрос. В одном чате
+   генерация строго одна: пришедшее во время генерации ждёт и отвечается следующим, уже с прошлым ходом в истории.
+   Эскалация (кнопка, «оператор», личный заказ) — по каждому сообщению сразу; накопленное в очереди после передачи
+   человеку не отвечается. Очередь в памяти процесса: рестарт admin теряет неотвеченное (как и раньше).
+   **Генерация**: `answer_with_meta(session, text, user_id=synthetic)` — история подтягивается из
+   `query_logs` по синтетическому `user_id` (ключ — `chat_id`, окно 30 мин как у Telegram). Ответ уходит
+   **одним** сообщением, когда готов (10–60 с). Плейсхолдер «Секунду, ищу ответ…» с последующей правкой
+   (`imbot.v2.Chat.Message.update`) убран 2026-10-08: в Б24 правка проходит, но Wazzup не пересылает её в
+   WhatsApp/Max — клиент видел только «ищу ответ…» после каждого своего сообщения, а сам ответ не получал.
 8. ✅ **Конвертация** HTML → BBCode (`src/b24/format.py`, §5), кнопка «Позвать оператора» (`ACTION: SEND`,
    `b24_service.operator_keyboard`).
 9. ✅ **Эскалация** → `imopenlines.bot.session.operator`, либо `.transfer` с `TRANSFER_ID = B24_TRANSFER_TO`
@@ -355,19 +375,20 @@ claude mcp add --transport http bitrix24-docs https://mcp-dev.bitrix24.tech/mcp
      («мой заказ», «статус заказа», «не привезли», «брак», «возврат денег», «рекламация»).
    - **слой 2, через Haiku** — поле `needs_human` в intent-экстракторе (`src/rag/intent_extractor.py`, правило 9),
      пробрасывается как `AnswerMeta.needs_human`. Срабатывает после генерации (10–40 с): сгенерированный ответ
-     НЕ отправляется, плейсхолдер редактируется в «Передаю диалог оператору». Ловит то, чего нет в списках:
+     НЕ отправляется, вместо него клиенту уходит «Передаю диалог оператору». Ловит то, чего нет в списках:
      недовольство ботом, жалобы без ключевых слов. ⚠️ Промпт общий для Telegram/веб/Б24 — после деплоя нужен
      eval-прогон и сравнение с последним, чтобы классификация не поехала (там `needs_human` игнорируется).
    - `B24_MAX_CONSECUTIVE_ERRORS` ошибок генерации подряд. Клиенту уходит
-   «Передаю диалог оператору» + телефоны; при отказе Bitrix — текст с телефонами, диалог остаётся у бота;
+   «Передаю диалог оператору» + телефоны — **до** вызова transfer (после передачи бот может потерять доступ к чату:
+   `ACCESS_DENIED` на живом портале); при отказе Bitrix — ещё текст с телефонами, диалог остаётся у бота;
    `WRONG_CHAT` (уже у оператора) считается успехом. Сводку оператору не шлём: история сессии видна ему целиком.
    ❌ Не сделано: триггер по низкому `top_score` (шкала не откалибрована) и по повторным 👎.
 10. ✅ **Журнал**: `query_logs` с `user_id = synthetic_user_id("b24:chat<chat_id>")`,
-    `username = "b24:<имя>#<user_id>"`, `bot_message_id` = id плейсхолдера; judge через общий
+    `username = "b24:<имя>#<user_id>"`, `bot_message_id` = id сообщения с ответом; judge через общий
     `admin/services/judge_service.py` (туда же переехал judge веб-чата). Запрос оператора пишется как
     `query_type = OPERATOR`.
 11. ✅ **Env**: `B24_APPLICATION_TOKEN`, `B24_BOT_ID=511`, `B24_TRANSFER_TO`, `B24_MAX_CONSECUTIVE_ERRORS`,
-    `B24_OPERATOR_TTL_MINUTES` — в `config.py`/`.env.example`; опц. `B24_OPERATOR_QUEUE_ID` / `B24_OPERATOR_USER_ID`,
+    `B24_OPERATOR_TTL_MINUTES`, `B24_DEBOUNCE_SECONDS` — в `config.py`/`.env.example`; опц. `B24_OPERATOR_QUEUE_ID` / `B24_OPERATOR_USER_ID`,
     `B24_PUBLIC_URL` (для документации/логов). `client_endpoint` и `access_token` берём из события.
 12. **Инфра**: домен + nginx + HTTPS перед 8001; после этого попросить Б24 обновить `webhookUrl`
     через `imbot.v2.Bot.update`. Деплой ручной: `ssh deploy@5.253.228.164`, `/var/www/dedteplodar`,

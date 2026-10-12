@@ -190,8 +190,12 @@ Reliability:
 `BITRIX24.md`** (формат событий с реального перехвата, методы ответа, BBCode, кнопки, план эндпоинта,
 открытые вопросы). В коде (ветка `bitrix24`): этап 1 — `POST /api/v1/b24/events` (`admin/routers/b24.py`,
 парсер/верификация `src/b24/webhook.py`, без basic-auth, `B24_APPLICATION_TOKEN` в `.env`); этап 2 — фоновый
-ответ `admin/services/b24_service.py` (плейсхолдер → `answer_with_meta` → журнал → правка в ответ + кнопка
-«Позвать оператора»), REST `src/b24/client.py`, HTML→BBCode `src/b24/format.py`; этап 3 — эскалация: таблица
+ответ `admin/services/b24_service.py` (очередь чата: ждём паузу клиента `B24_DEBOUNCE_SECONDS`=6 с, склеиваем серию
+сообщений, одна генерация на чат за раз → `answer_with_meta` → **одно** сообщение с ответом + кнопка «Позвать оператора»
+→ журнал; плейсхолдера «ищу ответ…» с правкой нет — Wazzup не пересылает правки в WA/Max), REST `src/b24/client.py`,
+HTML→BBCode `src/b24/format.py`; сотрудник в диалоге (`connector=0` в Б24 или эхо Wazzup
+`=== Исходящее сообщение, автор: Телефон ===` — менеджер написал с телефона, приходит от имени клиента) →
+бот молчит (`B24Event.is_staff_message`, BITRIX24.md §10 п. 4a); этап 3 — эскалация: таблица
 `b24_sessions` (`src/b24/models.py`, schema-probe `b24_sessions` в `assert_schema_ready`), state-machine
 `src/b24/sessions.py`, передача через `imopenlines.bot.session.operator|transfer`, бот молчит пока диалог у
 оператора. Распознавание «хочу человека» в два слоя: регэкспы в `b24_service` + поле `needs_human` в

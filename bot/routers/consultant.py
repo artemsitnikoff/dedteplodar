@@ -374,7 +374,7 @@ async def handle_question(message: Message) -> None:
         logger.error("Generator error: %s", e, exc_info=True)
         answer = (
             "Извините, не удалось получить ответ. Попробуйте ещё раз или позвоните нам:\n"
-            "<b>8 800 775-03-07</b> (бесплатно, ежедневно 10:00–21:00 МСК)"
+            "<b>8 800 775-03-07</b> (бесплатно, ежедневно 10:00–21:00 НСК)"
         )
         meta = AnswerMeta(query_type="ERROR")
     finally:
@@ -537,8 +537,8 @@ async def handle_operator(callback: CallbackQuery) -> None:
         "🆘 <b>Запрос принят.</b>\n\n"
         "Оператор свяжется с вами в ближайшее время.\n\n"
         "Если срочно — звоните прямо сейчас:\n"
-        "📞 <b>8 800 775-03-07</b> (бесплатно, ежедн. 10:00–21:00 МСК)\n"
-        "📞 <b>8 800 101-43-53</b> — интернет-магазин (ежедн. 9:00–20:00 МСК)"
+        "📞 <b>8 800 775-03-07</b> (бесплатно, ежедн. 10:00–21:00 НСК)\n"
+        "📞 <b>8 800 101-43-53</b> — интернет-магазин (ежедн. 9:00–20:00 НСК)"
     )
     await callback.answer()
     logger.info("Operator requested user=%s q=%r", callback.from_user.id, entry.get("question", "")[:60])

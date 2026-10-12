@@ -67,16 +67,16 @@ async def events(request: Request):
     ev = B24Event.from_payload(payload)
     if ev.is_message:
         logger.info(
-            "[b24] %s chat=%s dialog=%s entity=%s/%s user=%s(%r) bot=%s/%s msg_id=%s answer=%s text=%r",
+            "[b24] %s chat=%s dialog=%s entity=%s/%s user=%s(%r) bot=%s/%s msg_id=%s answer=%s staff=%s text=%r",
             ev.event, ev.chat_id, ev.dialog_id, ev.entity_type, ev.entity_id,
             ev.user_id, ev.user_name, ev.bot_id, ev.bot_code, ev.message_id,
-            ev.should_answer, ev.text[:_TEXT_LOG_LIMIT],
+            ev.should_answer, ev.is_staff_message, ev.text[:_TEXT_LOG_LIMIT],
         )
     else:
         logger.info("[b24] %s chat=%s dialog=%s bot=%s/%s", ev.event, ev.chat_id, ev.dialog_id, ev.bot_id, ev.bot_code)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[b24] payload=%s", json.dumps(mask_secrets(payload), ensure_ascii=False))
 
-    if ev.should_answer or ev.is_join:
+    if ev.should_answer or ev.is_staff_message or ev.is_join:
         spawn_handle_event(ev)
     return {"ok": True}

@@ -15,7 +15,6 @@ from tests.test_b24_webhook import message_add_payload
 class FakeClient:
     """Records REST calls; flags simulate portal-side failures."""
     instances = []
-    fail_update = False
     transfer_error: Exception | None = None
 
     def __init__(self, endpoint, token, **kw):
@@ -27,12 +26,6 @@ class FakeClient:
         self._next_id += 1
         self.calls.append(("send", bot_id, dialog_id, text, keyboard))
         return self._next_id
-
-    async def update_message(self, bot_id, message_id, text=None, keyboard=None):
-        self.calls.append(("update", bot_id, message_id, text, keyboard))
-        if FakeClient.fail_update:
-            raise RuntimeError("ACCESS_DENIED")
-        return True
 
     async def session_operator(self, chat_id):
         self.calls.append(("operator", chat_id))
@@ -64,9 +57,9 @@ class FakeGenerator:
 @pytest.fixture()
 def env(monkeypatch):
     FakeClient.instances.clear()
-    FakeClient.fail_update = False
     FakeClient.transfer_error = None
     svc._seen_message_ids.clear()
+    svc._queues.clear()
     with SessionLocal() as s:
         s.query(B24Session).delete()
         s.commit()
@@ -83,6 +76,7 @@ def env(monkeypatch):
     monkeypatch.setattr(svc, "spawn_judge", lambda *a, **kw: judged.append(a))
     monkeypatch.setattr(svc.settings, "b24_transfer_to", "")
     monkeypatch.setattr(svc.settings, "b24_max_consecutive_errors", 2)
+    monkeypatch.setattr(svc.settings, "b24_debounce_seconds", 0)
     return {"gen": gen, "logged": logged, "judged": judged, "feedback": feedback}
 
 
@@ -90,8 +84,18 @@ def event(**overrides) -> B24Event:
     return B24Event.from_payload(message_add_payload(**overrides))
 
 
-def run(ev):
-    asyncio.run(svc.handle_event(ev))
+async def drain():
+    while svc._queues:
+        await asyncio.gather(*[q.task for q in svc._queues.values() if q.task])
+
+
+def run(*evs):
+    """Deliver events back to back (as one burst) and wait until the chat queue is answered."""
+    async def go():
+        for ev in evs:
+            await svc.handle_event(ev)
+        await drain()
+    asyncio.run(go())
 
 
 def calls():
@@ -100,16 +104,16 @@ def calls():
 
 # ── answering ─────────────────────────────────────────────────────────────
 
-def test_happy_path_placeholder_then_edit(env):
+def test_happy_path_single_message(env):
     run(event())
-    client = FakeClient.instances[0]
+    client = FakeClient.instances[-1]
     assert client.endpoint == "https://teplodar.bitrix24.ru/rest/" and client.token.startswith("6c5baa6a")
-    assert [c[0] for c in client.calls] == ["send", "update"]
-    send, upd = client.calls
-    assert send[1] == 511 and send[2] == "chat19167" and send[3] == svc.PLACEHOLDER_TEXT and send[4] is None
-    assert upd[2] == 101
-    assert upd[3] == "[b]Русь-12 Л[/b] подойдёт\nhttps://teplodar.ru/x_y/"
-    assert upd[4][0]["TEXT"] == svc.OPERATOR_REQUEST_TEXT and upd[4][0]["ACTION"] == "SEND"
+    # One message with the answer — no "ищу ответ…" placeholder to edit later:
+    # Wazzup doesn't relay edits to WhatsApp/Max.
+    [send] = calls()
+    assert send[0] == "send" and send[1] == 511 and send[2] == "chat19167"
+    assert send[3] == "[b]Русь-12 Л[/b] подойдёт\nhttps://teplodar.ru/x_y/"
+    assert send[4][0]["TEXT"] == svc.OPERATOR_REQUEST_TEXT and send[4][0]["ACTION"] == "SEND"
     q, uid = env["gen"].calls[0]
     assert q == "посоветуйте печь для бани на 14 кубов" and uid < 0
     log = env["logged"][0]
@@ -119,25 +123,17 @@ def test_happy_path_placeholder_then_edit(env):
     assert sessions.get_status(19167) == STATUS_BOT
 
 
-def test_falls_back_to_send_when_edit_fails(env):
-    FakeClient.fail_update = True
-    run(event())
-    kinds = [c[0] for c in FakeClient.instances[0].calls]
-    assert kinds == ["send", "update", "send"]
-    assert FakeClient.instances[0].calls[-1][3].startswith("[b]Русь-12 Л[/b]")
-
-
 def test_duplicate_delivery_is_ignored(env):
     run(event())
     run(event())
-    assert len(FakeClient.instances) == 1 and len(env["gen"].calls) == 1
+    assert len(env["gen"].calls) == 1 and len(calls()) == 1
 
 
 def test_generator_failure_sends_fallback_without_escalating_first_time(env):
     env["gen"].fail = True
     run(event())
-    c = FakeClient.instances[0].calls
-    assert c[-1][0] == "update" and c[-1][3] == svc.FALLBACK_TEXT
+    c = calls()
+    assert [x[0] for x in c] == ["send"] and c[0][3] == svc.FALLBACK_TEXT
     assert env["logged"][0]["query_type"] == "ERROR" and env["judged"] == []
     assert "operator" not in [x[0] for x in c] and sessions.get_status(19167) == STATUS_BOT
 
@@ -182,7 +178,8 @@ def test_is_operator_request_negative(text):
 def test_operator_request_transfers_and_silences_bot(env, text):
     run(event(**{"data.message.text": text}))
     assert env["gen"].calls == []
-    assert calls() == [("operator", 19167), ("send", 511, "chat19167", svc.TRANSFER_TEXT, None)]
+    # the notice goes first: after the transfer the bot may lose access to the chat
+    assert calls() == [("send", 511, "chat19167", svc.TRANSFER_TEXT, None), ("operator", 19167)]
     assert env["logged"][0]["query_type"] == "OPERATOR" and env["feedback"] == [(1, "operator")]
     assert sessions.get_status(19167) == STATUS_OPERATOR
     # next client message in the same session: bot must not answer
@@ -196,7 +193,7 @@ def test_operator_request_transfers_and_silences_bot(env, text):
 ])
 def test_personal_order_goes_straight_to_operator(env, text):
     run(event(**{"data.message.text": text}))
-    assert env["gen"].calls == [] and calls()[0] == ("operator", 19167)
+    assert env["gen"].calls == [] and ("operator", 19167) in calls()
     assert sessions.get_status(19167) == STATUS_OPERATOR
 
 
@@ -209,21 +206,22 @@ def test_generic_order_questions_are_answered_by_bot(env, text):
 def test_transfer_to_queue_when_configured(env, monkeypatch):
     monkeypatch.setattr(svc.settings, "b24_transfer_to", "queue7")
     run(event(**{"data.message.text": "Позвать оператора"}))
-    assert calls()[0] == ("transfer", 19167, "queue7", False)
+    assert ("transfer", 19167, "queue7", False) in calls()
     assert sessions.get_status(19167) == STATUS_OPERATOR
 
 
 def test_transfer_failure_keeps_bot_and_gives_hotline(env):
     FakeClient.transfer_error = B24Error("OPERATOR_WRONG", "no operators")
     run(event(**{"data.message.text": "Позвать оператора"}))
-    assert calls()[-1] == ("send", 511, "chat19167", svc.TRANSFER_FAILED_TEXT, None)
+    assert [c[3] for c in calls() if c[0] == "send"] == [svc.TRANSFER_TEXT, svc.TRANSFER_FAILED_TEXT]
     assert sessions.get_status(19167) == STATUS_BOT
 
 
 def test_already_with_operator_counts_as_success(env):
     FakeClient.transfer_error = B24Error("WRONG_CHAT", "Operator is not a bot")
     run(event(**{"data.message.text": "Позвать оператора"}))
-    assert calls()[-1][3] == svc.TRANSFER_TEXT and sessions.get_status(19167) == STATUS_OPERATOR
+    assert [c[3] for c in calls() if c[0] == "send"] == [svc.TRANSFER_TEXT]
+    assert sessions.get_status(19167) == STATUS_OPERATOR
 
 
 def test_consecutive_errors_escalate(env):
@@ -232,8 +230,8 @@ def test_consecutive_errors_escalate(env):
     assert "operator" not in [c[0] for c in calls()]
     run(event(**{"data.message.id": "2", "data.message.text": "ещё раз"}))
     kinds = [c[0] for c in calls()]
-    assert kinds.count("operator") == 1 and kinds[-1] == "send"
-    assert calls()[-1][3] == svc.TRANSFER_TEXT
+    assert kinds.count("operator") == 1 and kinds[-2:] == ["send", "operator"]
+    assert calls()[-2][3] == svc.TRANSFER_TEXT
     assert sessions.get_status(19167) == STATUS_OPERATOR
     # the escalation caused by errors is not logged as a separate OPERATOR turn
     assert [l["query_type"] for l in env["logged"]] == ["ERROR", "ERROR"]
@@ -273,16 +271,147 @@ def test_intent_needs_human_hands_off_instead_of_answering(env):
     text = "Третий раз задаю вопрос и получаю ерунду, сколько это будет продолжаться?"
     assert not svc.is_operator_request(text) and not svc.is_personal_order(text)
     run(event(**{"data.message.text": text}))
-    c = FakeClient.instances[0].calls
-    # placeholder → transfer → placeholder edited into the handoff text (keyboard removed)
-    assert [x[0] for x in c] == ["send", "operator", "update"]
-    assert c[0][3] == svc.PLACEHOLDER_TEXT
-    assert c[2][2] == 101 and c[2][3] == svc.TRANSFER_TEXT and c[2][4] == "N"
+    c = calls()
+    # the generated answer is dropped: transfer → handoff text only
+    assert c == [("send", 511, "chat19167", svc.TRANSFER_TEXT, None), ("operator", 19167)]
     assert sessions.get_status(19167) == STATUS_OPERATOR
     assert [l["query_type"] for l in env["logged"]] == ["OPERATOR"] and env["judged"] == []
 
 
 def test_intent_needs_human_false_is_normal_answer(env):
     run(event())  # FakeGenerator meta has no needs_human attribute → treated as False
-    assert [x[0] for x in FakeClient.instances[0].calls] == ["send", "update"]
+    assert [x[0] for x in calls()] == ["send"]
     assert sessions.get_status(19167) == STATUS_BOT
+
+
+# ── staff in the dialog: bot steps aside ──────────────────────────────────
+
+# Real texts from the Wazzup → Max line (2026-10-08): what a manager typed on the
+# company phone arrives authored by the client, with a marker line.
+WZ_OUTGOING = "=== Исходящее сообщение, автор: Телефон ===\nВчера направляли Вам счет  на оплату."
+WZ_OUTGOING_QUOTED = (
+    ">>Нашел из наличия в своем городе\n \n \n=== Исходящее сообщение, автор: Телефон ===\nВерону?"
+)
+
+
+@pytest.mark.parametrize("text", [WZ_OUTGOING, WZ_OUTGOING_QUOTED])
+def test_manager_message_from_phone_silences_bot(env, text):
+    run(event(**{"data.message.text": text}))
+    assert env["gen"].calls == [] and calls() == [] and env["logged"] == []
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+    # the client's reply goes to the manager, not to the bot
+    run(event(**{"data.message.id": "2", "data.message.text": "Здравствуйте, хотел вам позвонить"}))
+    assert env["gen"].calls == [] and calls() == []
+
+
+def test_employee_message_in_bitrix_silences_bot(env):
+    run(event(**{"data.message.text": "Время не МСК, а НСК (Новосибирск)", "data.user.id": "1",
+                 "data.user.name": "Евгения", "data.user.connector": "0", "data.user.externalAuthId": "default"}))
+    assert env["gen"].calls == [] and calls() == []
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+    with SessionLocal() as s:
+        row = s.get(B24Session, 19167)
+        assert row.user_id is None  # the row keeps describing the client, not the employee
+
+
+def test_manager_message_after_bot_answer_takes_over(env):
+    run(event())
+    assert len(env["gen"].calls) == 1
+    run(event(**{"data.message.id": "2", "data.message.text": WZ_OUTGOING}))
+    run(event(**{"data.message.id": "3", "data.message.text": "а сколько стоит доставка?"}))
+    assert len(env["gen"].calls) == 1 and sessions.get_status(19167) == STATUS_OPERATOR
+
+
+def test_new_line_session_resumes_bot_after_staff(env):
+    run(event(**{"data.message.text": WZ_OUTGOING}))
+    run(event(**{"data.message.id": "9", "data.message.text": "а есть печь на 20 кубов?",
+                 "data.chat.entityId": "livechat|13|20001|515"}))
+    assert len(env["gen"].calls) == 1 and sessions.get_status(19167) == STATUS_BOT
+
+
+def test_answer_dropped_if_manager_stepped_in_while_generating(env):
+    gen = env["gen"]
+    original = gen.answer_with_meta
+
+    def slow_answer(session, query, user_id=None, **kw):
+        # the manager's phone message lands while the bot is still generating
+        sessions.mark_handoff(19167, svc.REASON_STAFF)
+        return original(session, query, user_id=user_id, **kw)
+
+    gen.answer_with_meta = slow_answer
+    run(event())
+    assert len(gen.calls) == 1 and calls() == [] and env["logged"] == []
+
+
+# ── bursts: several messages, one answer ──────────────────────────────────
+
+def test_burst_of_messages_gets_one_answer(env):
+    # chat 21393 on 2026-10-07: two messages 10 s apart got two answers, the
+    # second one asking "which product?" because it never saw the first
+    run(event(**{"data.message.id": "1", "data.message.text": "Сигнал КОВ-25 СКВс двухконтурный"}),
+        event(**{"data.message.id": "2", "data.message.text": "добрый день есть такой?"}))
+    assert [q for q, _ in env["gen"].calls] == ["Сигнал КОВ-25 СКВс двухконтурный\nдобрый день есть такой?"]
+    assert [c[0] for c in calls()] == ["send"]
+    assert env["logged"][0]["question"] == "Сигнал КОВ-25 СКВс двухконтурный\nдобрый день есть такой?"
+
+
+def test_waits_for_the_client_to_pause(env, monkeypatch):
+    monkeypatch.setattr(svc.settings, "b24_debounce_seconds", 0.3)
+
+    async def go():
+        await svc.handle_event(event(**{"data.message.id": "1", "data.message.text": "У меня стоит Каскад-18"}))
+        await asyncio.sleep(0.1)  # client is still typing
+        await svc.handle_event(event(**{"data.message.id": "2", "data.message.text": "Хотел бы подобрать новую"}))
+        assert env["gen"].calls == []  # nothing answered mid-burst
+        await drain()
+
+    asyncio.run(go())
+    assert [q for q, _ in env["gen"].calls] == ["У меня стоит Каскад-18\nХотел бы подобрать новую"]
+
+
+def test_message_during_generation_is_answered_next_not_in_parallel(env):
+    gen = env["gen"]
+    original = gen.answer_with_meta
+    state = {"active": 0, "max_active": 0}
+
+    async def go():
+        loop = asyncio.get_running_loop()
+        second = event(**{"data.message.id": "2", "data.message.text": "а с баком есть?"})
+
+        def answer(session, query, user_id=None, **kw):
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            if len(gen.calls) == 0:
+                # the client writes again while the first answer is being generated
+                asyncio.run_coroutine_threadsafe(svc.handle_event(second), loop).result()
+            try:
+                return original(session, query, user_id=user_id, **kw)
+            finally:
+                state["active"] -= 1
+
+        gen.answer_with_meta = answer
+        await svc.handle_event(event())
+        await drain()
+
+    asyncio.run(go())
+    assert [q for q, _ in gen.calls] == ["посоветуйте печь для бани на 14 кубов", "а с баком есть?"]
+    assert state["max_active"] == 1
+    assert [c[0] for c in calls()] == ["send", "send"]
+
+
+def test_queued_messages_left_to_operator_after_escalation(env):
+    run(event(**{"data.message.id": "1", "data.message.text": "Здравствуйте"}),
+        event(**{"data.message.id": "2", "data.message.text": "где мой заказ №12345"}))
+    assert env["gen"].calls == []
+    assert calls() == [("send", 511, "chat19167", svc.TRANSFER_TEXT, None), ("operator", 19167)]
+
+
+def test_queued_messages_left_to_manager_from_phone(env):
+    run(event(**{"data.message.id": "1", "data.message.text": "Добрый день!"}),
+        event(**{"data.message.id": "2", "data.message.text": WZ_OUTGOING}))
+    assert env["gen"].calls == [] and calls() == []
+
+
+def test_queue_is_cleaned_up(env):
+    run(event())
+    assert svc._queues == {}

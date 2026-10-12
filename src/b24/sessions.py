@@ -51,13 +51,15 @@ def parse_entity_id(entity_id: str) -> tuple[str | None, str | None]:
 def touch(ev: B24Event, *, operator_ttl_minutes: int) -> SessionState:
     now = _utcnow()
     line_id, line_session_id = parse_entity_id(ev.entity_id)
+    # The row describes the client; an employee's message must not overwrite it.
+    user_id, user_name = (None, None) if ev.author_is_employee else (ev.user_id, ev.user_name)
     is_new = False
     with SessionLocal() as s:
         row = s.get(B24Session, ev.chat_id)
         if row is None:
             row = B24Session(
                 chat_id=ev.chat_id, dialog_id=ev.dialog_id, line_id=line_id,
-                line_session_id=line_session_id, user_id=ev.user_id, user_name=ev.user_name,
+                line_session_id=line_session_id, user_id=user_id, user_name=user_name,
                 status=STATUS_BOT, created_at=now,
             )
             s.add(row)
@@ -81,10 +83,10 @@ def touch(ev: B24Event, *, operator_ttl_minutes: int) -> SessionState:
                 row.line_id = line_id
             if ev.dialog_id:
                 row.dialog_id = ev.dialog_id
-            if ev.user_id:
-                row.user_id = ev.user_id
-            if ev.user_name:
-                row.user_name = ev.user_name
+            if user_id:
+                row.user_id = user_id
+            if user_name:
+                row.user_name = user_name
         if ev.message_id:
             row.last_message_id = ev.message_id
         row.updated_at = now
