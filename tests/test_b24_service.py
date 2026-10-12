@@ -264,6 +264,53 @@ def test_join_chat_resets_state(env):
     assert len(env["gen"].calls) == 1
 
 
+@pytest.mark.parametrize("opener", ["Позвать оператора", "=== Исходящее сообщение, автор: Телефон ===\nДобрый день!"])
+@pytest.mark.parametrize("join_first", [True, False])
+def test_client_returns_after_closed_dialog_gets_bot_either_event_order(env, monkeypatch, opener, join_first):
+    # A dialog went to a human (client asked / manager wrote first), the operator
+    # closed it; hours later the client writes again → new session. On Wazzup lines
+    # the only new-session signal is JOINCHAT, and it often arrives AFTER the first
+    # message — which used to be dropped as "still with the operator".
+    run(event(**{"data.message.id": "1", "data.message.text": opener}))
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+    _age_handoff(minutes=180)
+    monkeypatch.setattr(svc.settings, "b24_debounce_seconds", 0.2)
+    before = len(calls())
+    question = event(**{"data.message.id": "2", "data.message.text": "а какая гарантия на Русь-12?"})
+
+    async def go():
+        if join_first:
+            await svc.handle_event(event(**JOIN))
+        await svc.handle_event(question)
+        if not join_first:
+            await asyncio.sleep(0.05)  # the join lands while the message is held
+            await svc.handle_event(event(**JOIN))
+        await drain()
+
+    asyncio.run(go())
+    assert [q for q, _ in env["gen"].calls] == ["а какая гарантия на Русь-12?"]
+    assert [c[0] for c in calls()[before:]] == ["send"]
+    assert sessions.get_status(19167) == STATUS_BOT
+
+
+def test_held_message_escalates_if_new_session_starts_with_operator_request(env):
+    run(event(**{"data.message.id": "1", "data.message.text": "Позвать оператора"}))
+    _age_handoff(minutes=180)
+    before = len(calls())
+    run(event(**{"data.message.id": "2", "data.message.text": "соедините с оператором"}), event(**JOIN))
+    assert env["gen"].calls == []
+    assert calls()[before:] == [("send", 511, "chat19167", svc.TRANSFER_TEXT, None), ("operator", 19167)]
+
+
+def test_message_in_open_operator_dialog_is_held_then_dropped(env):
+    run(event(**{"data.message.id": "1", "data.message.text": "Позвать оператора"}))
+    before = len(calls())
+    run(event(**{"data.message.id": "2", "data.message.text": "соедините с оператором ещё раз"}))
+    # no JOINCHAT came → still the operator's dialog: no answer, no second transfer
+    assert env["gen"].calls == [] and calls()[before:] == []
+    assert svc._queues == {}
+
+
 @pytest.mark.parametrize("join_first", [True, False])
 def test_manager_opens_new_session_bot_stays_silent_either_event_order(env, join_first):
     # Test line 2026-10-12: a manager's opening message and the new session's

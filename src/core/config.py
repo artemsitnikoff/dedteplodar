@@ -82,7 +82,8 @@ class Settings(BaseSettings):
     # doesn't notify the bot when the operator closes the session.
     b24_operator_ttl_minutes: int = Field(default=720)
     # Messenger clients split one question into several messages: wait this
-    # long after the last one and answer them together.
+    # long after the last one and answer them together. Also the window for a
+    # new session's JOINCHAT to arrive after its first message — keep it > 0.
     b24_debounce_seconds: float = Field(default=6.0)
 
     def __post_init__(self):

@@ -238,7 +238,14 @@ async def handle_event(ev: B24Event) -> None:
                     ev.chat_id, "employee" if ev.author_is_employee else "manager via connector")
         return
     if state.status == STATUS_OPERATOR:
-        logger.info("[b24] chat=%s is with an operator (%s) — bot stays silent", ev.chat_id, state.handoff_reason)
+        # Usually a client talking to the operator — but it may be the first
+        # message of a new session (operator closed the old one) whose JOINCHAT
+        # is still on its way: Wazzup lines show a new session only by JOINCHAT,
+        # delivered before or after this message. Hold it for the pause;
+        # _answer answers only if the join has reset the dialog to the bot.
+        logger.info("[b24] chat=%s is with a human (%s) — held in case a new session starts",
+                    ev.chat_id, state.handoff_reason)
+        _enqueue(ev)
         return
 
     bot_id = ev.bot_id or settings.b24_bot_id
@@ -293,8 +300,7 @@ async def _answer(batch: list[B24Event]) -> None:
     if len(batch) > 1:
         ev = replace(ev, text="\n".join(e.text.strip() for e in batch))
     if sessions.get_status(ev.chat_id) == STATUS_OPERATOR:
-        logger.info("[b24] chat=%s went to a human before the answer — %d queued message(s) left to them",
-                    ev.chat_id, len(batch))
+        logger.info("[b24] chat=%s is with a human — %d queued message(s) left to them", ev.chat_id, len(batch))
         return
     if len(batch) > 1:
         logger.info("[b24] chat=%s: %d messages answered together", ev.chat_id, len(batch))
@@ -302,6 +308,17 @@ async def _answer(batch: list[B24Event]) -> None:
     bot_id = ev.bot_id or settings.b24_bot_id
     user_id, username = journal_identity(ev)
     client = B24Client(ev.client_endpoint, ev.access_token)
+
+    # Messages held while the chat looked human-handled skipped the instant
+    # escalation checks in handle_event; for the rest this is a no-op re-check.
+    for e in batch:
+        if is_operator_request(e.text):
+            await escalate(ev, client, bot_id, REASON_REQUESTED, user_id, username)
+            return
+        if is_personal_order(e.text):
+            await escalate(ev, client, bot_id, REASON_PERSONAL_ORDER, user_id, username)
+            return
+
     t0 = time.monotonic()
     try:
         generator = await get_eval_generator()
