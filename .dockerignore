@@ -11,6 +11,8 @@ admin/frontend/node_modules/
 # otherwise COPY brings in a dangling symlink and subsequent mkdir/RUN fails.
 data/
 base/
+# DB copies made before deploys on the stand (hundreds of MB each)
+backups/
 
 # Python caches
 __pycache__/
