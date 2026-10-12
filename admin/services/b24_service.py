@@ -32,6 +32,7 @@ import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from types import SimpleNamespace
 
 from admin.services.eval_service import get_eval_generator
@@ -109,6 +110,10 @@ REASON_PERSONAL_ORDER = "personal_order"
 REASON_ERRORS = "consecutive_errors"
 REASON_INTENT = "intent_needs_human"
 REASON_STAFF = "staff_replied"
+
+# A new session's JOINCHAT may arrive after its first message; a handoff that
+# message caused (manager's opening line from the phone) is younger than this.
+_JOIN_KEEPS_HANDOFF = timedelta(seconds=30)
 
 _SEEN_MAX = 2000
 _seen_message_ids: "OrderedDict[int, None]" = OrderedDict()
@@ -214,8 +219,10 @@ def spawn_handle_event(ev: B24Event) -> asyncio.Task:
 
 async def handle_event(ev: B24Event) -> None:
     if ev.is_join:
-        logger.info("[b24] bot joined chat=%s dialog=%s — dialog state reset", ev.chat_id, ev.dialog_id)
-        sessions.reset_to_bot(ev.chat_id)
+        if sessions.reset_to_bot(ev.chat_id, keep_handoff_newer_than=_JOIN_KEEPS_HANDOFF):
+            logger.info("[b24] bot joined chat=%s dialog=%s — dialog state reset", ev.chat_id, ev.dialog_id)
+        else:
+            logger.info("[b24] bot joined chat=%s right after a handoff — dialog stays with the human", ev.chat_id)
         return
 
     if not mark_seen(ev.message_id):
@@ -228,7 +235,7 @@ async def handle_event(ev: B24Event) -> None:
         # staff message also restarts the operator TTL.
         sessions.mark_handoff(ev.chat_id, REASON_STAFF)
         logger.info("[b24] chat=%s staff replied (%s) — bot goes silent",
-                    ev.chat_id, "employee" if ev.author_is_employee else "phone via connector")
+                    ev.chat_id, "employee" if ev.author_is_employee else "manager via connector")
         return
     if state.status == STATUS_OPERATOR:
         logger.info("[b24] chat=%s is with an operator (%s) — bot stays silent", ev.chat_id, state.handoff_reason)

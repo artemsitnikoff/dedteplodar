@@ -78,7 +78,19 @@ def test_bot_turns_and_consecutive_errors():
 def test_reset_to_bot_on_join():
     sessions.touch(ev(), operator_ttl_minutes=60)
     sessions.mark_handoff(19167, "errors")
-    sessions.reset_to_bot(19167)
+    assert sessions.reset_to_bot(19167) is True
     assert sessions.get_status(19167) == STATUS_BOT
     sessions.reset_to_bot(None)      # no-op
     sessions.reset_to_bot(424242)    # unknown chat — no-op
+
+
+def test_reset_to_bot_keeps_a_fresh_handoff():
+    sessions.touch(ev(), operator_ttl_minutes=60)
+    sessions.mark_handoff(19167, "staff_replied")
+    assert sessions.reset_to_bot(19167, keep_handoff_newer_than=timedelta(seconds=30)) is False
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+    with SessionLocal() as s:
+        s.get(B24Session, 19167).handoff_at = sessions._utcnow() - timedelta(minutes=5)
+        s.commit()
+    assert sessions.reset_to_bot(19167, keep_handoff_newer_than=timedelta(seconds=30)) is True
+    assert sessions.get_status(19167) == STATUS_BOT

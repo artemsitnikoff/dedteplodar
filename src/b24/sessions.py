@@ -6,6 +6,8 @@ Rules:
   changed, a new dialog started (operator finished the previous one) → back
   to `bot`; if `operator` state is older than the TTL → back to `bot` as a
   safety net (Bitrix doesn't tell us when the operator closes the session).
+  Wazzup lines (`wz_…|<line>|<wazzup chat uuid>|<user>`) keep the same third
+  part across sessions, so there ONIMBOTV2JOINCHAT is the only new-session signal.
 - `mark_bot_turn()` after each generated answer keeps the consecutive-error
   counter for the auto-escalation trigger.
 - `mark_handoff()` after a successful transfer; `reset_to_bot()` on
@@ -131,16 +133,29 @@ def mark_handoff(chat_id: int, reason: str) -> None:
         s.commit()
 
 
-def reset_to_bot(chat_id: int | None) -> None:
+def reset_to_bot(chat_id: int | None, *, keep_handoff_newer_than: timedelta | None = None) -> bool:
+    """Back to `bot`. Returns False if a recent handoff was kept instead.
+
+    ``keep_handoff_newer_than``: Bitrix delivers a new session's JOINCHAT and
+    its first message in either order (same second); if that first message
+    already handed the dialog to a human, the join must not undo it.
+    """
     if not chat_id:
-        return
+        return True
     with SessionLocal() as s:
         row = s.get(B24Session, chat_id)
         if row is None:
-            return
+            return True
+        now = _utcnow()
+        if (
+            keep_handoff_newer_than is not None and row.status == STATUS_OPERATOR
+            and row.handoff_at and now - row.handoff_at < keep_handoff_newer_than
+        ):
+            return False
         _reset(row)
-        row.updated_at = _utcnow()
+        row.updated_at = now
         s.commit()
+        return True
 
 
 def get_status(chat_id: int) -> str | None:

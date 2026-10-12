@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -245,13 +246,35 @@ def test_new_line_session_resumes_bot_after_handoff(env):
     assert len(env["gen"].calls) == 1 and sessions.get_status(19167) == STATUS_BOT
 
 
+def _age_handoff(chat_id=19167, minutes=5):
+    with SessionLocal() as s:
+        s.get(B24Session, chat_id).handoff_at = sessions._utcnow() - timedelta(minutes=minutes)
+        s.commit()
+
+
+JOIN = {"event": "ONIMBOTV2JOINCHAT", "data.message.text": ""}
+
+
 def test_join_chat_resets_state(env):
     run(event(**{"data.message.text": "Позвать оператора"}))
-    join = event(**{"event": "ONIMBOTV2JOINCHAT", "data.message.text": ""})
-    run(join)
+    _age_handoff()  # the operator session ended a while ago, a new one starts
+    run(event(**JOIN))
     assert sessions.get_status(19167) == STATUS_BOT
     run(event(**{"data.message.id": "10", "data.message.text": "вопрос"}))
     assert len(env["gen"].calls) == 1
+
+
+@pytest.mark.parametrize("join_first", [True, False])
+def test_manager_opens_new_session_bot_stays_silent_either_event_order(env, join_first):
+    # Test line 2026-10-12: a manager's opening message and the new session's
+    # JOINCHAT arrive in the same second, in either order. When the join came
+    # second it used to reset the dialog to the bot, and the client's reply
+    # ("Да, актуально") got a bot handoff message.
+    opening = event(**{"data.message.id": "1", "data.message.text": WZ_OUTGOING})
+    run(*([event(**JOIN), opening] if join_first else [opening, event(**JOIN)]))
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+    run(event(**{"data.message.id": "2", "data.message.text": "Да, актуально"}))
+    assert env["gen"].calls == [] and calls() == []
 
 
 # ── layer 2: intent says needs_human ──────────────────────────────────────
