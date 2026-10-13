@@ -321,7 +321,8 @@ def test_manager_opens_new_session_bot_stays_silent_either_event_order(env, join
     run(*([event(**JOIN), opening] if join_first else [opening, event(**JOIN)]))
     assert sessions.get_status(19167) == STATUS_OPERATOR
     run(event(**{"data.message.id": "2", "data.message.text": "Да, актуально"}))
-    assert env["gen"].calls == [] and calls() == []
+    assert env["gen"].calls == []
+    assert [c[0] for c in calls()] == ["operator"]  # only the silent queue handoff, no message
 
 
 # ── layer 2: intent says needs_human ──────────────────────────────────────
@@ -367,11 +368,12 @@ WZ_OUTGOING_QUOTED = (
 @pytest.mark.parametrize("text", [WZ_OUTGOING, WZ_OUTGOING_QUOTED])
 def test_manager_message_from_phone_silences_bot(env, text):
     run(event(**{"data.message.text": text}))
-    assert env["gen"].calls == [] and calls() == [] and env["logged"] == []
+    # the session goes to the line's queue, silently — nothing is sent to the client
+    assert env["gen"].calls == [] and calls() == [("operator", 19167)] and env["logged"] == []
     assert sessions.get_status(19167) == STATUS_OPERATOR
     # the client's reply goes to the manager, not to the bot
     run(event(**{"data.message.id": "2", "data.message.text": "Здравствуйте, хотел вам позвонить"}))
-    assert env["gen"].calls == [] and calls() == []
+    assert env["gen"].calls == [] and calls() == [("operator", 19167)]
 
 
 def test_employee_message_in_bitrix_silences_bot(env):
@@ -479,9 +481,46 @@ def test_queued_messages_left_to_operator_after_escalation(env):
 def test_queued_messages_left_to_manager_from_phone(env):
     run(event(**{"data.message.id": "1", "data.message.text": "Добрый день!"}),
         event(**{"data.message.id": "2", "data.message.text": WZ_OUTGOING}))
-    assert env["gen"].calls == [] and calls() == []
+    assert env["gen"].calls == [] and calls() == [("operator", 19167)]
 
 
 def test_queue_is_cleaned_up(env):
     run(event())
     assert svc._queues == {}
+
+
+# ── manager outside Bitrix24 → session goes to the line's queue ───────────
+
+def test_manager_from_wazzup_in_bitrix_also_goes_to_queue(env):
+    run(event(**{"data.message.text": "=== Исходящее сообщение, автор: Битрикс24 (Диджитал Клаудс Интегратор) ===\nДобрый день! Нужна печь?"}))
+    assert calls() == [("operator", 19167)] and env["gen"].calls == []
+
+
+def test_manager_echo_uses_configured_transfer_target(env, monkeypatch):
+    monkeypatch.setattr(svc.settings, "b24_transfer_to", "queue7")
+    run(event(**{"data.message.text": WZ_OUTGOING}))
+    assert calls() == [("transfer", 19167, "queue7", False)]
+
+
+@pytest.mark.parametrize("error", [B24Error("WRONG_CHAT", "Operator is not a bot"), B24Error("ACCESS_DENIED"), RuntimeError("timeout")])
+def test_manager_echo_never_messages_the_client_even_if_transfer_fails(env, error):
+    # already with an operator / bot lost the session / network — the bot stays
+    # silent either way: no "не получилось передать" text in the client's WhatsApp
+    FakeClient.transfer_error = error
+    run(event(**{"data.message.text": WZ_OUTGOING}))
+    assert [c[0] for c in calls()] == ["operator"]
+    assert sessions.get_status(19167) == STATUS_OPERATOR and env["logged"] == []
+
+
+def test_every_manager_echo_retries_the_queue_handoff(env):
+    # stateless on purpose: if the first attempt raced the session start, the next
+    # manager message gets it into the queue; afterwards Bitrix says WRONG_CHAT
+    run(event(**{"data.message.id": "1", "data.message.text": WZ_OUTGOING}))
+    run(event(**{"data.message.id": "2", "data.message.text": "=== Исходящее сообщение, автор: Телефон ===\nВы тут?"}))
+    assert calls() == [("operator", 19167), ("operator", 19167)]
+
+
+def test_employee_writing_in_the_open_line_is_not_transferred(env):
+    # the employee answers inside the Open Line — the dialog is already theirs
+    run(event(**{"data.message.text": "Добрый день, чем помочь?", "data.user.id": "1", "data.user.connector": "0"}))
+    assert calls() == [] and sessions.get_status(19167) == STATUS_OPERATOR

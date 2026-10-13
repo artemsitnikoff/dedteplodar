@@ -6,7 +6,9 @@ and does not guarantee redelivery). Flow per ONIMBOTV2MESSAGEADD:
 
   1. dedup by message id (paired deliveries were seen in the wild)
   2. a person on our side spoke (employee in Bitrix24, or a manager on the
-     company phone echoed by Wazzup) → the dialog is theirs, bot goes silent
+     company phone echoed by Wazzup) → the dialog is theirs, bot goes silent;
+     for the phone case the session is also put in the line's queue, silently,
+     so operators see it in Bitrix24 instead of it sitting on the bot
   3. session state (src/b24/sessions.py): if an operator has the dialog →
      stay silent; a new Open Line session on the same chat → bot again
   4. escalation before RAG: "Позвать оператора" button / "оператор…" /
@@ -231,11 +233,12 @@ async def handle_event(ev: B24Event) -> None:
 
     state = sessions.touch(ev, operator_ttl_minutes=settings.b24_operator_ttl_minutes)
     if ev.is_staff_message:
-        # No transfer call: the person is already talking to the client. Each
-        # staff message also restarts the operator TTL.
+        # Each staff message also restarts the operator TTL.
         sessions.mark_handoff(ev.chat_id, REASON_STAFF)
         logger.info("[b24] chat=%s staff replied (%s) — bot goes silent",
                     ev.chat_id, "employee" if ev.author_is_employee else "manager via connector")
+        if ev.is_outgoing_echo:
+            await _queue_for_operators(ev)
         return
     if state.status == STATUS_OPERATOR:
         # Usually a client talking to the operator — but it may be the first
@@ -403,22 +406,7 @@ async def escalate(
     # Say it before the transfer: once an operator picks the dialog up, the bot
     # can lose write access to the chat (ACCESS_DENIED seen on the live portal).
     await _safe_send(client, bot_id, ev.dialog_id, TRANSFER_TEXT)
-    try:
-        if settings.b24_transfer_to:
-            ok = await client.session_transfer(ev.chat_id, settings.b24_transfer_to)
-        else:
-            ok = await client.session_operator(ev.chat_id)
-    except B24Error as e:
-        if e.code == "WRONG_CHAT":
-            # "Operator is not a bot" — the dialog is already with a human.
-            logger.info("[b24] chat=%s already handled by an operator (%s)", ev.chat_id, e)
-            ok = True
-        else:
-            logger.error("[b24] transfer failed chat=%s reason=%s: %s", ev.chat_id, reason, e)
-            ok = False
-    except Exception as e:
-        logger.error("[b24] transfer failed chat=%s reason=%s: %s", ev.chat_id, reason, e)
-        ok = False
+    ok = await _transfer(ev, client, reason)
 
     if ok:
         sessions.mark_handoff(ev.chat_id, reason)
@@ -426,6 +414,41 @@ async def escalate(
     else:
         await _safe_send(client, bot_id, ev.dialog_id, TRANSFER_FAILED_TEXT)
     return ok
+
+
+async def _transfer(ev: B24Event, client: B24Client, reason: str) -> bool:
+    """Hand the Open Line session to the line's queue (or B24_TRANSFER_TO).
+
+    True if Bitrix accepted it or the session is no longer the bot's to give.
+    """
+    try:
+        if settings.b24_transfer_to:
+            return await client.session_transfer(ev.chat_id, settings.b24_transfer_to)
+        return await client.session_operator(ev.chat_id)
+    except B24Error as e:
+        if e.code == "WRONG_CHAT":
+            # "Operator is not a bot" — the session is already with a human.
+            logger.info("[b24] chat=%s already handled by an operator (%s)", ev.chat_id, e)
+            return True
+        logger.error("[b24] transfer failed chat=%s reason=%s: %s", ev.chat_id, reason, e)
+    except Exception as e:
+        logger.error("[b24] transfer failed chat=%s reason=%s: %s", ev.chat_id, reason, e)
+    return False
+
+
+async def _queue_for_operators(ev: B24Event) -> None:
+    """A manager wrote from the phone / Wazzup, outside Bitrix24: put the session
+    in the line's queue so operators see it and one can take it. Nothing goes to
+    the client. Tried on every such message — stateless, so it survives the
+    JOINCHAT races; once the session is no longer the bot's, Bitrix answers
+    WRONG_CHAT and nothing changes."""
+    try:
+        client = B24Client(ev.client_endpoint, ev.access_token)
+    except ValueError as e:
+        logger.error("[b24] cannot build REST client for chat=%s: %s", ev.chat_id, e)
+        return
+    if await _transfer(ev, client, REASON_STAFF):
+        logger.info("[b24] chat=%s: session put in the line queue (manager wrote outside Bitrix24)", ev.chat_id)
 
 
 async def _safe_send(client: B24Client, bot_id: int, dialog_id: str, text: str, keyboard=None) -> int | None:

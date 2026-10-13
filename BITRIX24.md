@@ -336,8 +336,12 @@ claude mcp add --transport http bitrix24-docs https://mcp-dev.bitrix24.tech/mcp
    `B24Event`; `B24Event.should_answer` = `ONIMBOTV2MESSAGEADD` + `entityType == LINES` + автор не бот, не сотрудник,
    не эхо Wazzup + непустой текст.
 4. ✅ **Дедуп** по `data.message.id` (LRU 2000 в `b24_service.mark_seen`), т.к. повторы приходят.
-4a. ✅ **Сотрудник в диалоге → бот молчит** (`B24Event.is_staff_message`): `mark_handoff("staff_replied")` без
-   вызова transfer, каждое такое сообщение продлевает TTL. Два источника:
+4a. ✅ **Сотрудник в диалоге → бот молчит** (`B24Event.is_staff_message`): `mark_handoff("staff_replied")`, каждое
+   такое сообщение продлевает TTL. Если менеджер писал **вне Б24** (эхо Wazzup — с телефона или из окна Wazzup), бот
+   ещё и **молча** отдаёт сессию в очередь линии (`session.operator` / `B24_TRANSFER_TO`; решение 2026-10-13 —
+   иначе сессия висит на боте и операторы её не видят). Клиенту ничего не пишется, даже если передача не удалась.
+   Пробует на каждом таком сообщении (без состояния — переживает гонки с JOINCHAT); когда сессия уже не у бота,
+   Bitrix отвечает `WRONG_CHAT`. Сотрудник, пишущий прямо в чате линии, уже владеет диалогом — ему не передаём. Два источника:
    - сотрудник пишет в чате линии в Б24: `data.user.connector == "0"` (клиенты линий — `connector=1`,
      `externalAuthId=imconnector`; без поля считаем клиентом);
    - **Wazzup** (линии WA/Max, `entityId = wz_…|<line>|…`) дублирует в линию то, что менеджер написал **с телефона**,

@@ -195,7 +195,7 @@ Reliability:
 → журнал; плейсхолдера «ищу ответ…» с правкой нет — Wazzup не пересылает правки в WA/Max), REST `src/b24/client.py`,
 HTML→BBCode `src/b24/format.py`; сотрудник в диалоге (`connector=0` в Б24 или эхо Wazzup
 `=== Исходящее сообщение, автор: Телефон ===` — менеджер написал с телефона, приходит от имени клиента) →
-бот молчит (`B24Event.is_staff_message`, BITRIX24.md §10 п. 4a); этап 3 — эскалация: таблица
+бот молчит, а при эхе Wazzup ещё и молча отдаёт сессию в очередь линии, чтобы операторы её видели (`B24Event.is_staff_message`, BITRIX24.md §10 п. 4a); этап 3 — эскалация: таблица
 `b24_sessions` (`src/b24/models.py`, schema-probe `b24_sessions` в `assert_schema_ready`), state-machine
 `src/b24/sessions.py`, передача через `imopenlines.bot.session.operator|transfer`, бот молчит пока диалог у
 оператора. Распознавание «хочу человека» в два слоя: регэкспы в `b24_service` + поле `needs_human` в
