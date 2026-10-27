@@ -42,6 +42,7 @@ class ProductListItem(BaseModel):
     category_id: Optional[int] = None
     category_name: Optional[str] = None
     chunks_count: int = 0
+    is_active: bool = True          # False = gone from the site feed (catalog sync)
     created_at: datetime
     updated_at: datetime
 

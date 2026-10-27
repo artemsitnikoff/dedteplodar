@@ -68,6 +68,7 @@ async def list_products(
             category_id=product.category_id,
             category_name=product.category.name if product.category else None,
             chunks_count=chunk_counts.get(product.id, 0),
+            is_active=product.is_active,
             created_at=product.created_at,
             updated_at=product.updated_at,
         ))

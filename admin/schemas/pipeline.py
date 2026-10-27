@@ -28,6 +28,15 @@ class TaskStartResponse(BaseModel):
     status: str
 
 
+class CatalogSyncState(BaseModel):
+    """Last catalog sync (base/catalog_sync_state.json) + whether one can be started."""
+    configured: bool                 # YANDEX_YML_URL is set
+    source: Optional[str] = None     # the feed URL (host only is enough for the UI)
+    running: bool = False
+    last: Optional[dict] = None      # SyncReport.to_dict() of the last run
+    history: List[dict] = []
+
+
 class FAQContent(BaseModel):
     """FAQ file content."""
     content: str

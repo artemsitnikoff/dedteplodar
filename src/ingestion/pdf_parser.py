@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 import httpx
 from sqlalchemy.orm import Session
@@ -122,8 +122,23 @@ class PDFParser:
             logger.error(f"Error parsing document {document_id} ({document_url}): {e}")
             return False
 
-    async def parse_pdfs(self, limit: Optional[int] = None) -> dict:
-        """Parse multiple PDF documents."""
+    async def parse_pdfs(
+        self,
+        limit: Optional[int] = None,
+        product_ids: Optional[Iterable[int]] = None,
+    ) -> dict:
+        """Parse multiple PDF documents.
+
+        `product_ids` restricts the run to documents of those products (catalog
+        sync passes the products it just scraped); None = every unparsed PDF.
+        """
+        ids: Optional[list[int]] = None
+        if product_ids is not None:
+            ids = list(product_ids)
+            if not ids:
+                logger.info("No PDF documents to parse")
+                return {'total': 0, 'success': 0, 'failed': 0, 'empty': 0}
+
         # Get documents to parse - extract data first
         document_data = []
         for session in get_session():
@@ -131,6 +146,8 @@ class PDFParser:
                 Document.doc_type == DocumentType.PDF,
                 Document.full_text.is_(None)
             )
+            if ids is not None:
+                query = query.filter(Document.product_id.in_(ids))
 
             if limit:
                 query = query.limit(limit)

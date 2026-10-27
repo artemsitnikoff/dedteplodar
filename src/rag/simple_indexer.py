@@ -55,6 +55,7 @@ class SimpleIndexBuilder:
         # Query all products with their params and categories
         stmt = (
             select(Product)
+            .where(Product.is_active.is_(True))  # dropped from the feed → not indexed
             .options(
                 selectinload(Product.params),
                 selectinload(Product.category)
@@ -100,6 +101,8 @@ class SimpleIndexBuilder:
 
         total_chunks = 0
         for doc in documents:
+            if doc.product is not None and not doc.product.is_active:
+                continue  # instruction of a product that left the site
             chunks = self.chunker.chunk_document(
                 doc=doc,
                 product=doc.product

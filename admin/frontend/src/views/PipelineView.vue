@@ -13,6 +13,8 @@ const loading = ref(true)
 const importFile = ref(null)
 const uploading = ref(false)
 const rebuildingIndex = ref(false)
+const catalogSync = ref({ configured: false, running: false, last: null, history: [] })
+const startingSync = ref(false)
 
 let pollInterval = null
 
@@ -22,6 +24,15 @@ async function loadStats() {
     stats.value = response.data
   } catch (error) {
     console.error('Failed to load stats:', error)
+  }
+}
+
+async function loadCatalogSync() {
+  try {
+    const response = await api.getCatalogSync()
+    catalogSync.value = response.data
+  } catch (error) {
+    console.error('Failed to load catalog sync state:', error)
   }
 }
 
@@ -50,7 +61,7 @@ async function pollTaskStatus(taskId) {
       setTimeout(() => pollTaskStatus(taskId), 2000)
     } else {
       // Task finished, reload stats
-      await loadStats()
+      await Promise.all([loadStats(), loadCatalogSync()])
       if (taskData.status === 'done') {
         toast('Задача выполнена успешно', 'success')
       } else if (taskData.status === 'failed') {
@@ -140,6 +151,44 @@ async function rebuildIndex() {
   }
 }
 
+async function runCatalogSync(dryRun = false) {
+  try {
+    startingSync.value = true
+    const response = await api.startCatalogSync(dryRun)
+    const taskData = response.data
+    tasks.value.unshift({
+      id: taskData.task_id,
+      type: 'sync',
+      status: taskData.status,
+      created_at: new Date().toISOString(),
+      description: dryRun ? 'Проверка фида (dry-run)' : 'Синхронизация каталога с сайтом'
+    })
+    toast(dryRun ? 'Проверка фида запущена' : 'Синхронизация каталога запущена', 'info')
+    catalogSync.value.running = true
+    pollTaskStatus(taskData.task_id)
+  } catch (error) {
+    console.error('Failed to start catalog sync:', error)
+    const detail = error.response?.data?.detail
+    toast(detail ? `Не запустилось: ${detail}` : 'Ошибка запуска синхронизации', 'error')
+  } finally {
+    startingSync.value = false
+  }
+}
+
+function syncStatusBadge(status) {
+  switch (status) {
+    case 'ok': return { type: 'success', text: 'Успешно' }
+    case 'error': return { type: 'danger', text: 'Ошибка' }
+    case 'skipped': return { type: 'default', text: 'Пропущено' }
+    case 'running': return { type: 'info', text: 'Выполняется' }
+    default: return { type: 'default', text: status || '—' }
+  }
+}
+
+function feedHost(url) {
+  try { return new URL(url).host } catch { return url }
+}
+
 function getTaskStatusBadge(status) {
   switch (status) {
     case 'running': return { type: 'info', text: 'Выполняется' }
@@ -153,6 +202,7 @@ function getTaskIcon(type) {
   switch (type) {
     case 'import': return '📥'
     case 'rebuild': return '🔄'
+    case 'sync': return '🌐'
     default: return '⚙️'
   }
 }
@@ -168,7 +218,7 @@ const formatDate = (dateStr) => {
 
 onMounted(async () => {
   loading.value = true
-  await Promise.all([loadStats(), loadTasks()])
+  await Promise.all([loadStats(), loadTasks(), loadCatalogSync()])
   loading.value = false
 })
 
@@ -225,6 +275,76 @@ onUnmounted(() => {
 
         <!-- Actions section -->
         <div class="actions-section">
+          <!-- Catalog sync (feed URL → products → index), same as the nightly cron -->
+          <div class="action-card sync-card">
+            <div class="card-header">
+              <h3 class="card-title">
+                <span class="card-icon">🌐</span>
+                Синхронизация с сайтом
+              </h3>
+              <StatusBadge
+                v-if="catalogSync.last"
+                :type="catalogSync.running ? 'info' : syncStatusBadge(catalogSync.last.status).type"
+                :status="catalogSync.running ? 'Выполняется' : syncStatusBadge(catalogSync.last.status).text"
+              />
+            </div>
+            <div class="card-body">
+              <p v-if="catalogSync.configured" class="card-description">
+                Каждую ночь бот забирает YML-фид с <strong>{{ feedHost(catalogSync.source) }}</strong>,
+                добавляет новые товары, читает их страницы и инструкции и обновляет индекс.
+                Здесь то же самое можно запустить вручную.
+              </p>
+              <p v-else class="card-description">
+                Ссылка на YML-фид не задана: добавьте <code>YANDEX_YML_URL</code> в <code>.env</code>
+                и перезапустите admin. Пока доступен только ручной импорт файла ниже.
+              </p>
+
+              <div v-if="catalogSync.last" class="sync-last">
+                <div class="sync-row">
+                  <span class="info-label">Последний запуск:</span>
+                  <span class="info-value">{{ new Date(catalogSync.last.started_at).toLocaleString('ru-RU') }}</span>
+                  <span v-if="catalogSync.last.duration_s" class="info-muted">· {{ Math.round(catalogSync.last.duration_s) }} с</span>
+                </div>
+                <div v-if="catalogSync.last.status === 'ok'" class="sync-row">
+                  в фиде {{ catalogSync.last.offers }} · новых <strong>{{ catalogSync.last.products_new }}</strong>
+                  · изменённых {{ catalogSync.last.products_changed }}
+                  · снято {{ catalogSync.last.products_missing }}
+                  <template v-if="catalogSync.last.index && !catalogSync.last.index.skipped">
+                    · индекс −{{ catalogSync.last.index.chunks_removed || 0 }} +{{ catalogSync.last.index.chunks_added || 0 }}
+                  </template>
+                  <template v-else-if="catalogSync.last.index && catalogSync.last.index.skipped">
+                    · индекс без изменений
+                  </template>
+                </div>
+                <div v-if="catalogSync.last.new_names && catalogSync.last.new_names.length" class="sync-row info-muted">
+                  новые: {{ catalogSync.last.new_names.join(', ') }}
+                </div>
+                <div v-if="catalogSync.last.error" class="sync-row sync-error">
+                  {{ catalogSync.last.error }}
+                </div>
+              </div>
+              <p v-else class="info-muted">Синхронизация ещё ни разу не запускалась.</p>
+
+              <div class="btn-row">
+                <button
+                  class="btn btn-primary"
+                  :disabled="!catalogSync.configured || catalogSync.running || startingSync"
+                  @click="runCatalogSync(false)"
+                >
+                  {{ catalogSync.running ? 'Выполняется…' : 'Обновить каталог сейчас' }}
+                </button>
+                <button
+                  class="btn btn-ghost"
+                  :disabled="!catalogSync.configured || catalogSync.running || startingSync"
+                  title="Скачать фид и показать разницу, ничего не меняя"
+                  @click="runCatalogSync(true)"
+                >
+                  Только проверить
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- Import YML -->
           <div class="action-card">
             <div class="card-header">
@@ -474,6 +594,56 @@ onUnmounted(() => {
   color: var(--fg-2);
   line-height: var(--lh-normal);
   margin: 0 0 var(--sp-4) 0;
+}
+
+/* Catalog sync card */
+.sync-card {
+  grid-column: 1 / -1;
+}
+
+.sync-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.sync-last {
+  margin: var(--sp-3) 0;
+  font-size: var(--fs-14);
+  line-height: 1.6;
+}
+
+.sync-row + .sync-row {
+  margin-top: 2px;
+}
+
+.info-muted {
+  color: var(--fg-3);
+  font-size: var(--fs-13, 0.85rem);
+}
+
+.sync-error {
+  color: var(--danger);
+  font-family: monospace;
+  font-size: var(--fs-13, 0.8rem);
+  word-break: break-word;
+}
+
+.btn-row {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border-1);
+  color: var(--fg-1);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
 }
 
 /* File upload */

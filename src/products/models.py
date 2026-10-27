@@ -2,10 +2,11 @@
 
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import String, Text, Numeric, Boolean, ForeignKey, DateTime, Index
+from sqlalchemy import String, Text, Numeric, Boolean, ForeignKey, DateTime, Index, inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.core.database import Base
+from src.core.database import Base, engine
+from src.core.migrations import register_schema_probe, safe_alter
 
 
 class Category(Base):
@@ -41,6 +42,10 @@ class Product(Base):
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
     picture_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # False = the product disappeared from the site's YML feed (catalog sync).
+    # Kept in the DB with its scraped text and documents so it can come back
+    # without re-scraping, but excluded from the RAG index.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
     # Scraped data
     scraped_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -74,6 +79,30 @@ class ProductParam(Base):
     __table_args__ = (
         Index("idx_product_param", "product_id", "name"),
     )
+
+
+# Idempotent ALTER for prod DBs created before `is_active` existed.
+# Fresh DBs (tests, first boot) have no `products` table yet at import time —
+# create_tables() will create it with the column, nothing to do here.
+def _ensure_migrations() -> None:
+    insp = inspect(engine)
+    if "products" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("products")}
+    if "is_active" not in cols:
+        with engine.begin() as conn:
+            safe_alter(conn, "ALTER TABLE products ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
+
+
+_schema_ok = False
+try:
+    _ensure_migrations()
+    _schema_ok = True
+except Exception:
+    import logging
+    logging.getLogger(__name__).exception("products schema init failed")
+
+register_schema_probe("products", lambda: _schema_ok)
 
 
 # Import Document model here to avoid circular imports

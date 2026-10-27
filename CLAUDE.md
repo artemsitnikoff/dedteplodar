@@ -95,6 +95,61 @@ UI: `admin/frontend/src/views/EvalView.vue` — три вкладки (Дата�
 - **Прогрев**: `admin/main.py` lifespan делает фоновый `get_eval_generator()` чтобы первый чат не ждал ~30с загрузки E5+индекса. ⚠️ Следствие — admin теперь **постоянно** держит torch+E5 в RAM (раньше грузил лениво на первом eval-прогоне). На маленьком VPS вырастет RSS.
 - **Деплой**: без изменений в Docker (Dockerfile stage 1 собирает фронт). `docker compose up -d --build admin`. Бот не трогаем.
 
+## Синхронизация каталога с сайтом (YML-фид, cron)
+
+Товары на сайте добавляет контент-менеджер Теплодара; бот должен подхватывать их без
+разработчика. Источник — YML-фид Битрикса по постоянной ссылке (`YANDEX_YML_URL` в `.env`,
+Битрикс регенерирует файл сам). Ветка `catalog-sync`.
+
+- **Скрипт**: `scripts/sync_catalog.py` → `src/ingestion/catalog_sync.py:run_sync`. Шаги:
+  fetch (атомарно в `base/catalog_feed.xml`, прошлый — `*.prev.xml`) → parse (старый
+  `YMLParser`) → guard (нет офферов / меньше `catalog_sync_min_ratio`=0.5 от активных
+  товаров → abort, ничего не деактивируем) → diff по fingerprint'у (name/model/price/
+  category/description/url/params) → apply (upsert `YMLParser` + `products.is_active`) →
+  scrape страниц **только** новых и переехавших (`ProductScraper(product_ids=…)`) → PDF
+  только их (`PDFParser(product_ids=…)`) → индекс.
+- **Фид `bot.xml`** (ссылка от Вики 27.10.2026, Битрикс пересобирает раз в сутки): ~983 оффера,
+  13 категорий (бани, дымоходы, котлы, запчасти, комплектующие, печи/камины, аксессуары,
+  горелки, походные, «Снято с производства»), у всех price/url/categoryId/param, `description`
+  только у трети и это **HTML** → `yml_parser.html_to_text`. Многозначные `param` с одним
+  именем (Топливо: Дрова / Уголь) — отдельные строки. Имена короче, чем в старом фиде
+  («Куппер ПРО-22 (2.0)» без «Твердотопливный котел») — первый прогон пометит почти всё как
+  `changed`. Upsert не затирает `description` NULL'ом (`coalesce`), fingerprint это учитывает.
+- **changed ≠ new**: изменившиеся (цена/имя/параметры) → `refresh` только product-чанка, PDF-строки
+  не трогаем; новые и вернувшиеся → полный reindex (product + их документы).
+- **Пропавшие из фида** товары не удаляются: `products.is_active=False` (миграция в
+  `src/products/models.py`, probe `products` в `assert_schema_ready`), в индекс не попадают,
+  при возвращении — `reactivated`, скрейп не повторяется. Оффер, чей URL принадлежит другому
+  id, пропускается (`url_conflicts`), а не роняет весь upsert (`products.url` unique).
+- **Инкрементальный индекс** (`src/rag/incremental_indexer.py`): удаляет чанки затронутых
+  товаров (product + pdf), ре-чанкает активные, новые PDF-чанки дедупит против живого
+  индекса (тот же порог 0.92), эмбеддит только новое, склеивает с существующими
+  `embeddings_*.npy`/`metadata_*.pkl` и пишет **атомарно** (tmp + `os.replace`). Порядок:
+  embed → delete/insert в БД → файлы → commit. Без изменений в каталоге индекс не трогается.
+  `--full` = старый `build_full_index(rebuild=True)` (~3 ч на CPU).
+- **Hot-reload**: `SimpleRetriever.maybe_reload()` раз в `index_reload_interval`=10 с
+  сверяет mtime+size обоих файлов и перечитывает их; при расхождении длин (поймали писателя
+  между двумя replace) оставляет старый индекс до следующей проверки. `HybridRetriever`
+  держит неизменяемый `_IndexSnapshot` (meta+embeddings+BM25+product_mask) и пересобирает
+  его, когда `chunk_metadata` стал другим объектом. Рестарт бота/админки не нужен.
+- **Cron**: `scripts/cron/sync_catalog.sh` на хосте (`30 4 * * *`), внутри —
+  `docker compose exec -T admin python scripts/sync_catalog.py --notify`. Лок-файл
+  `base/.catalog_sync.lock` (fcntl) — cron и кнопка в админке не пересекаются.
+- **Админка**: `GET/POST /pipeline/catalog-sync` (состояние из `base/catalog_sync_state.json`,
+  запуск = тот же скрипт subprocess'ом, `?dry_run=true`), карточка «Синхронизация с сайтом»
+  на странице Конвейер, колонка «На сайте» в товарах. Кнопка «Пересборка индекса» теперь
+  передаёт `--rebuild` (раньше дублировала чанки).
+- **Docker**: в `requirements.txt` добавлены `lxml`, `selectolax`, `pypdf` — раньше импорт
+  YML в контейнере падал (образ ставил только runtime-deps). OCR (`ocrmypdf`) по-прежнему
+  только локально. ⚠️ selectolax ≥1.0 выпилил backend Modest — скрейперы переведены на
+  `selectolax.lexbor.LexborHTMLParser` (API тот же), иначе `ImportError` в контейнере.
+- **Скрейпер** пропускает общий каталог продукции («Скачать каталог 2025 (56 Mb)»,
+  `/doc/Каталог…pdf`, ~140k знаков) — он висит на каждой странице товара и раньше мог
+  приклеиться к первому товару, который его нашёл (`scraper._is_general_catalogue`).
+  Проверено 27.10.2026 на страницах Альфа 25 (16k знаков + РЭ) и Спутник Смарт 3 (24k + 2 РЭ).
+- Тесты: `tests/test_catalog_sync.py`, `tests/test_incremental_indexer.py`,
+  `tests/test_index_reload.py` (фейковые embedder/chunker, без torch).
+
 ## RAG-индекс — текущее состояние
 
 После рефакторинга (см. ниже):
@@ -179,6 +234,7 @@ Reliability:
 - **`start_admin.sh` использует порт 8001** — не 8000. Vue dev-сервер ждёт API на 8001.
 - **SQLite + параллельные воркеры** — все DB-записи через общий `threading.Lock` в `_eval_one`.
 - **Контекстуализация PDF-чанков** — текущий `contextualized_text` содержит имя продукта, но boilerplate всё равно ловится dedup'ом, т.к. косинус повторяющегося абзаца в разных префиксах остаётся выше 0.92.
+- **Синхронизация каталога ждёт ссылку на фид** — пока `YANDEX_YML_URL` пуст, cron ничего не качает (запрошена у Вики Бешели 27.10.2026). Разовый апдейт можно сделать из файла: `sync_catalog.py --file …`.
 - **Streaming UX** — фейковый, ждём перехода на API mode для реальных deltas. См. секцию Claude CLI auth выше.
 - **Cross-container slot pool в Docker** — `bot` и `admin` это РАЗНЫЕ контейнеры с разным `/tmp`, поэтому slot pool каждый сам себе. До 8 одновременных CLI subprocess под нагрузкой. Фикс — общий named volume на `/tmp/teplodar_claude_slots` в `docker-compose.yml`. Не сделано пока трафик не вырос.
 

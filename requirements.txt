@@ -30,3 +30,11 @@ langchain-text-splitters>=0.2.0
 
 # Anthropic SDK (for AnswerGenerator mode="api")
 anthropic>=0.30.0
+
+# Catalog ingestion inside the container (scripts/sync_catalog.py runs in `admin`
+# from cron): YML feed parsing, product-page scraping, PDF text extraction.
+# OCR (ocrmypdf) is deliberately NOT included — scanned PDFs are still an
+# offline, manual step (scripts/ocr_pdfs.py in a local venv).
+lxml>=4.9.0
+selectolax>=0.3.0
+pypdf>=3.0.0

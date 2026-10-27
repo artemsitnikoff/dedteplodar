@@ -82,6 +82,36 @@ docker compose logs -f admin
 cd ~/teplodarbot && git pull && docker compose up -d --build
 ```
 
+## Синхронизация каталога с сайтом (cron)
+
+Товары приходят из YML-фида сайта (`YANDEX_YML_URL` в `.env`, ссылка от контент-менеджера
+Теплодара; Битрикс пересобирает файл сам). `scripts/sync_catalog.py` скачивает фид, добавляет
+новые товары, читает их страницы и PDF и **инкрементально** обновляет индекс (минуты, а не
+3 часа полной пересборки). Бот и админка подхватывают новый индекс сами, без рестарта.
+
+Ставится на хост (не в контейнер), один раз после деплоя:
+
+```bash
+crontab -e
+# каждую ночь в 04:30
+30 4 * * * /var/www/dedteplodar/scripts/cron/sync_catalog.sh
+```
+
+Лог — `logs/catalog_sync.log`, итог прилетает в Telegram в `OPERATOR_CHAT_ID`, последний
+прогон виден в админке на странице «Конвейер» (там же кнопка «Обновить каталог сейчас»).
+
+Ручной запуск и проверка:
+
+```bash
+docker compose exec admin python scripts/sync_catalog.py --dry-run   # только показать разницу
+docker compose exec admin python scripts/sync_catalog.py             # полный цикл
+docker compose exec admin python scripts/sync_catalog.py --file base/upload_latest.xml  # из файла
+```
+
+Первый запуск на старой базе: индекс должен уже существовать (`embeddings_*.npy`), иначе
+скрипт попросит `python scripts/build_index.py --rebuild`. Защита от битого фида: если в
+фиде меньше половины активных товаров (`CATALOG_SYNC_MIN_RATIO`), ничего не меняется.
+
 ## Полезные команды
 
 ```bash

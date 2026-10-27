@@ -49,8 +49,9 @@ async def lifespan(app: FastAPI):
     import src.logs.models  # noqa: F401
     import src.eval.models  # noqa: F401
     import src.b24.models  # noqa: F401
+    import src.products.models  # noqa: F401  (is_active migration)
     from src.core.migrations import assert_schema_ready
-    assert_schema_ready(expected=["query_logs", "eval", "b24_sessions"])
+    assert_schema_ready(expected=["query_logs", "eval", "b24_sessions", "products"])
 
     # Warm up the RAG generator in the background so the first web-chat
     # request doesn't pay the ~30s E5 + index load. Non-blocking: startup

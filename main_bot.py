@@ -37,7 +37,8 @@ async def main() -> None:
     import src.logs.models  # noqa: F401
     import src.eval.models  # noqa: F401
     from src.core.migrations import assert_schema_ready
-    assert_schema_ready(expected=["query_logs", "eval"])
+    import src.products.models  # noqa: F401  (is_active migration)
+    assert_schema_ready(expected=["query_logs", "eval", "products"])
 
     # Load heavy models once at startup
     logger.info("Loading embedding model…")

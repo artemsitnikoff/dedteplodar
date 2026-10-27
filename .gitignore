@@ -77,5 +77,10 @@ teplodarbot.egg-info/
 
 # Yandex YML import (large, regenerated)
 yandex_yml_base.xml
+# catalog sync runtime files (feed copies, last-run state, lock) + admin upload
+base/catalog_feed*.xml
+base/catalog_sync_state.json*
+base/.catalog_sync.lock
+base/upload_latest.xml
 # generated diagram PDF (rebuild via docs/build_pdf.sh)
 docs/*.pdf

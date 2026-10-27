@@ -9,7 +9,8 @@ from urllib.parse import urljoin, urlparse, quote
 import xml.etree.ElementTree as ET
 
 import httpx
-from selectolax.parser import HTMLParser
+# selectolax ≥1.0 dropped the Modest backend; lexbor has the same API.
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..core.config import settings

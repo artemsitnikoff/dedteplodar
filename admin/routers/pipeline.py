@@ -15,7 +15,9 @@ from src.products.models import Product, Category
 from src.documents.models import Document
 from src.rag.models import Chunk
 from admin.dependencies import get_db
-from admin.schemas.pipeline import PipelineStats, TaskStatus, TaskStartResponse
+from admin.schemas.pipeline import PipelineStats, TaskStatus, TaskStartResponse, CatalogSyncState
+from src.core.config import settings
+from src.ingestion.catalog_sync import is_sync_running, read_state
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
 
@@ -169,7 +171,9 @@ async def rebuild_index():
     try:
         script_path = PROJECT_ROOT / "scripts" / "build_index.py"
         process = subprocess.Popen(
-            [sys.executable, str(script_path)],
+            # --rebuild: drop this version's chunks first; without it every
+            # click appended a second copy of every chunk to the index.
+            [sys.executable, str(script_path), "--rebuild"],
             cwd=PROJECT_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -189,6 +193,54 @@ async def rebuild_index():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start rebuild: {str(e)}")
+
+
+def _sync_task_running() -> bool:
+    return any(
+        t.get("script") == "sync_catalog.py" and t["process"].poll() is None
+        for t in _tasks.values()
+    )
+
+
+@router.get("/catalog-sync", response_model=CatalogSyncState)
+async def get_catalog_sync_state():
+    """Last sync report (written by scripts/sync_catalog.py) + run status."""
+    state = read_state()
+    return CatalogSyncState(
+        configured=bool(settings.yandex_yml_url),
+        source=settings.yandex_yml_url or None,
+        running=_sync_task_running() or is_sync_running(),
+        last=state.get("last"),
+        history=[h for h in state.get("history", []) if isinstance(h, dict)][:10],
+    )
+
+
+@router.post("/catalog-sync", response_model=TaskStartResponse)
+async def start_catalog_sync(dry_run: bool = False):
+    """Run the same sync cron runs at night: feed → products → scrape → index."""
+    if not settings.yandex_yml_url:
+        raise HTTPException(status_code=400, detail="YANDEX_YML_URL is not set in .env")
+    if _sync_task_running() or is_sync_running():
+        raise HTTPException(status_code=409, detail="Catalog sync is already running")
+
+    task_id = str(uuid.uuid4())
+    args = [sys.executable, str(PROJECT_ROOT / "scripts" / "sync_catalog.py"), "--notify"]
+    if dry_run:
+        args.append("--dry-run")
+    try:
+        process = subprocess.Popen(
+            args, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start catalog sync: {e}")
+    _tasks[task_id] = {
+        "process": process,
+        "status": "running",
+        "script": "sync_catalog.py",
+        "returncode": None,
+        "stderr": None,
+    }
+    return TaskStartResponse(task_id=task_id, status="started")
 
 
 @router.get("/tasks/{task_id}", response_model=TaskStatus)

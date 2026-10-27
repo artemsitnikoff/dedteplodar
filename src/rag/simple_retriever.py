@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import List, Optional
 from dataclasses import dataclass
 
+import os
+import threading
+import time
+
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -49,36 +53,104 @@ class SimpleRetriever:
         # Load precomputed embeddings if available
         self.embeddings = None
         self.chunk_metadata = None
+        # (npy mtime_ns, npy size, pkl mtime_ns, pkl size) of the loaded files —
+        # the catalog sync rewrites them in place and the long-running bot /
+        # admin pick the new index up via maybe_reload() without a restart.
+        self._index_stamp: Optional[tuple] = None
+        self._last_reload_check = 0.0
+        self._reload_lock = threading.Lock()
         self._load_index()
+
+    # ------------------------------------------------------------ disk I/O
+    def _stat_stamp(self) -> Optional[tuple]:
+        try:
+            a = os.stat(self.embeddings_path)
+            b = os.stat(self.metadata_path)
+        except FileNotFoundError:
+            return None
+        return (a.st_mtime_ns, a.st_size, b.st_mtime_ns, b.st_size)
+
+    def _read_index_files(self) -> tuple[np.ndarray, List[dict]]:
+        """Read both files; raise if they don't describe the same index."""
+        embeddings = np.load(self.embeddings_path)
+        with open(self.metadata_path, 'rb') as f:
+            metadata = pickle.load(f)
+        if embeddings.ndim != 2 or len(metadata) != embeddings.shape[0]:
+            raise ValueError(
+                f"index files disagree: embeddings {embeddings.shape} vs "
+                f"{len(metadata)} metadata rows"
+            )
+        return embeddings, metadata
 
     def _load_index(self):
         """Load precomputed embeddings and metadata."""
-        if self.embeddings_path.exists() and self.metadata_path.exists():
+        stamp = self._stat_stamp()
+        if stamp is None:
+            return
+        try:
+            self.embeddings, self.chunk_metadata = self._read_index_files()
+            self._index_stamp = stamp
+            logger.info(f"Loaded {len(self.chunk_metadata)} embeddings from cache")
+        except Exception as e:
+            logger.warning(f"Failed to load cached embeddings: {e}")
+            self.embeddings = None
+            self.chunk_metadata = None
+
+    def maybe_reload(self, min_interval: float = 10.0, force: bool = False) -> bool:
+        """Re-read the index files if they changed on disk.
+
+        Called on the search path; the stat() check runs at most once per
+        `min_interval` seconds. Returns True when a new index was swapped in
+        (callers rebuild anything derived from it, e.g. BM25).
+        """
+        now = time.monotonic()
+        if not force and now - self._last_reload_check < min_interval:
+            return False
+        with self._reload_lock:
+            self._last_reload_check = now
+            stamp = self._stat_stamp()
+            if stamp is None or stamp == self._index_stamp:
+                return False
+            # The writer replaces the two files one after the other. If we
+            # catch it in between, the row counts disagree — keep the current
+            # index and try again at the next interval.
             try:
-                self.embeddings = np.load(self.embeddings_path)
-                with open(self.metadata_path, 'rb') as f:
-                    self.chunk_metadata = pickle.load(f)
-                logger.info(f"Loaded {len(self.chunk_metadata)} embeddings from cache")
+                embeddings, metadata = self._read_index_files()
             except Exception as e:
-                logger.warning(f"Failed to load cached embeddings: {e}")
-                self.embeddings = None
-                self.chunk_metadata = None
+                logger.warning(f"Index reload skipped (will retry): {e}")
+                return False
+            if self._stat_stamp() != stamp:
+                return False  # changed again while we were reading
+            self.embeddings = embeddings
+            self.chunk_metadata = metadata
+            self._index_stamp = stamp
+            logger.info(f"Index reloaded from disk: {len(metadata)} chunks")
+            return True
 
     def save_index(self, embeddings: np.ndarray, chunk_metadata: List[dict]):
-        """Save embeddings and metadata to disk.
+        """Save embeddings and metadata to disk (atomically — readers never
+        see a half-written file; see maybe_reload).
 
         Args:
             embeddings: Array of shape (n_chunks, embedding_dim)
             chunk_metadata: List of metadata dicts for each chunk
         """
+        if len(chunk_metadata) != embeddings.shape[0]:
+            raise ValueError("embeddings and chunk_metadata have different lengths")
         self.data_dir.mkdir(exist_ok=True)
 
-        np.save(self.embeddings_path, embeddings)
-        with open(self.metadata_path, 'wb') as f:
+        tmp_npy = self.embeddings_path.with_name(self.embeddings_path.name + ".tmp")
+        tmp_pkl = self.metadata_path.with_name(self.metadata_path.name + ".tmp")
+        with open(tmp_npy, 'wb') as f:          # file object: np.save won't append ".npy"
+            np.save(f, embeddings)
+        with open(tmp_pkl, 'wb') as f:
             pickle.dump(chunk_metadata, f)
+        os.replace(tmp_npy, self.embeddings_path)
+        os.replace(tmp_pkl, self.metadata_path)
 
         self.embeddings = embeddings
         self.chunk_metadata = chunk_metadata
+        self._index_stamp = self._stat_stamp()
         logger.info(f"Saved {len(chunk_metadata)} embeddings to cache")
 
     def search(

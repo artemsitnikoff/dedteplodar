@@ -32,6 +32,7 @@ const columns = [
   { key: 'price', title: 'Цена', width: '120px', align: 'right' },
   { key: 'category_name', title: 'Категория', width: '200px' },
   { key: 'chunks_count', title: 'Чанков', width: '100px', align: 'center' },
+  { key: 'is_active', title: 'На сайте', width: '90px', align: 'center' },
   { key: 'updated_at', title: 'Обновлено', width: '140px' },
 ]
 
@@ -193,6 +194,12 @@ onMounted(() => {
 
         <template #cell-updated_at="{ value }">
           {{ formatDate(value) }}
+        </template>
+
+        <template #cell-is_active="{ value }">
+          <span :title="value ? 'Есть в YML-фиде сайта' : 'Пропал из фида сайта — в поиске не участвует'">
+            {{ value ? '✅' : '🚫' }}
+          </span>
         </template>
 
         <template #cell-chunks_count="{ value, item }">

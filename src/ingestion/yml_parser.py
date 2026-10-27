@@ -1,8 +1,11 @@
 """YML parser for Yandex Market format."""
 
+import html
 import logging
+import re
 from typing import List, Generator
 from lxml import etree
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.sqlite import insert
 
@@ -12,6 +15,25 @@ from ..products.schemas import YMLCategory, YMLOffer, YMLParam
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
+
+_BLOCK_TAG_RE = re.compile(r"<\s*(br|/p|/div|/li|/h[1-6]|/tr)\b[^>]*>", re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"[ \t\r\f\v]+")
+_NL_RE = re.compile(r"\n\s*\n+")
+
+
+def html_to_text(value: str | None) -> str | None:
+    """Bitrix exports <description> as HTML (<br />, <p>, <ul>…). The chunk
+    text must not carry tags, so flatten to plain text with line breaks."""
+    if not value:
+        return None
+    text = _BLOCK_TAG_RE.sub("\n", value)
+    text = _TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    text = _WS_RE.sub(" ", text)
+    text = "\n".join(line.strip() for line in text.split("\n"))
+    text = _NL_RE.sub("\n", text).strip()
+    return text or None
 
 
 class YMLParser:
@@ -113,7 +135,7 @@ class YMLParser:
                     elif elem.tag == 'name':
                         current_offer['name'] = text
                     elif elem.tag == 'description':
-                        current_offer['description'] = text
+                        current_offer['description'] = html_to_text(text)
                     elif elem.tag == 'param':
                         param_name = elem.get('name', '')
                         if param_name and text:
@@ -192,7 +214,9 @@ class YMLParser:
                             manufacturer_warranty=product_stmt.excluded.manufacturer_warranty,
                             category_id=product_stmt.excluded.category_id,
                             picture_url=product_stmt.excluded.picture_url,
-                            description=product_stmt.excluded.description,
+                            # bot.xml has <description> for ~1/3 of the offers; keep
+                            # the stored text when the feed sends none.
+                            description=func.coalesce(product_stmt.excluded.description, Product.description),
                             updated_at=product_stmt.excluded.updated_at
                         )
                     )

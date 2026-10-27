@@ -5,11 +5,12 @@ import hashlib
 import logging
 import re
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from selectolax.parser import HTMLParser
+# selectolax ≥1.0 dropped the Modest backend; lexbor has the same API.
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 from sqlalchemy.orm import Session
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -19,6 +20,21 @@ from ..products.models import Product
 from ..documents.models import Document, DocumentType
 
 logger = logging.getLogger(__name__)
+
+
+def _node_text(node) -> str:
+    """Visible text of a node with block boundaries kept apart. `text(strip=True)`
+    glued neighbouring blocks together («ОписаниеО серии…»)."""
+    text = node.text(separator=" ", strip=True)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_general_catalogue(pdf_url: str, link_text: str) -> bool:
+    """True for the site-wide product catalogue PDF (not a product document)."""
+    from urllib.parse import unquote
+    text = (link_text or "").lower()
+    path = unquote(pdf_url).lower()
+    return "каталог" in text and "скачать" in text or ("/doc/" in path and "каталог" in path)
 
 
 class ProductScraper:
@@ -74,6 +90,12 @@ class ProductScraper:
         """Extract full description and PDF links from product page HTML."""
         parser = HTMLParser(html)
 
+        # Scripts carry the page's schema.org JSON-LD (warranty, return policy,
+        # equipment lists…) — ~7k chars of JSON that otherwise ends up inside
+        # the product's chunk text. Drop them (and styles) before reading text.
+        for node in parser.css('script, style, noscript'):
+            node.decompose()
+
         # Extract full description
         full_description = None
 
@@ -91,7 +113,7 @@ class ProductScraper:
         for selector in description_selectors:
             desc_elem = parser.css_first(selector)
             if desc_elem:
-                full_description = desc_elem.text(strip=True)
+                full_description = _node_text(desc_elem)
                 if full_description and len(full_description) > 50:  # Meaningful content
                     break
 
@@ -101,7 +123,7 @@ class ProductScraper:
             if content_area:
                 text_blocks = []
                 for p in content_area.css('p, div.text, .description'):
-                    text = p.text(strip=True)
+                    text = _node_text(p)
                     if text and len(text) > 20:
                         text_blocks.append(text)
                 full_description = ' '.join(text_blocks) if text_blocks else None
@@ -137,6 +159,14 @@ class ProductScraper:
                     link_text = link.text(strip=True)
                     if not link_text:
                         link_text = href.split('/')[-1]
+
+                    # The whole-company catalogue («Скачать каталог 2025 (56 Mb)»,
+                    # /doc/Каталог…pdf) is linked from every product page. It is
+                    # not this product's manual: ~140k chars of other products
+                    # would be indexed under the first product that linked it.
+                    if _is_general_catalogue(pdf_url, link_text):
+                        logger.debug(f"Skipping general catalogue PDF on {url}: {pdf_url}")
+                        continue
 
                     pdf_links.append((pdf_url, link_text))
 
@@ -187,12 +217,32 @@ class ProductScraper:
             logger.error(f"Error scraping product {product_id} ({product_url}): {e}", exc_info=True)
             return False
 
-    async def scrape_products(self, limit: Optional[int] = None, force: bool = False) -> dict:
-        """Scrape multiple products."""
+    async def scrape_products(
+        self,
+        limit: Optional[int] = None,
+        force: bool = False,
+        product_ids: Optional[Iterable[int]] = None,
+    ) -> dict:
+        """Scrape multiple products.
+
+        `product_ids` restricts the run to those products (catalog sync passes
+        the ids it just inserted or whose URL changed); None = every product
+        that matches the `force` / `scraped_at` filter, as before.
+        """
+        ids: Optional[list[int]] = None
+        if product_ids is not None:
+            ids = list(product_ids)
+            if not ids:
+                logger.info("No products to scrape")
+                return {'total': 0, 'success': 0, 'failed': 0}
+
         # Get products to scrape - extract data first
         product_data = []
         for session in get_session():
             query = session.query(Product.id, Product.name, Product.url)
+
+            if ids is not None:
+                query = query.filter(Product.id.in_(ids))
 
             if not force:
                 query = query.filter(Product.scraped_at.is_(None))

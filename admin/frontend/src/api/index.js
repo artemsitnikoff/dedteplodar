@@ -58,6 +58,8 @@ export const api = {
   },
   rebuildIndex: () => client.post('/pipeline/rebuild-index'),
   getTask: (taskId) => client.get(`/pipeline/tasks/${taskId}`),
+  getCatalogSync: () => client.get('/pipeline/catalog-sync'),
+  startCatalogSync: (dryRun = false) => client.post('/pipeline/catalog-sync', null, { params: { dry_run: dryRun } }),
 
   // Categories
   getCategoriesTree: () => client.get('/categories/tree'),
