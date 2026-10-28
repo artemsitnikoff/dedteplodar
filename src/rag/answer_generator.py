@@ -356,6 +356,15 @@ def _format_history_for_prompt(history: list[dict] | None) -> str | None:
     return "\n".join(lines)
 
 
+def _already_answered(answer: str, history: list[dict] | None) -> bool:
+    """Was this exact answer one of the bot's turns in the recent dialog?"""
+    norm = " ".join((answer or "").split())
+    return bool(norm) and any(
+        turn.get("role") == "assistant" and " ".join((turn.get("content") or "").split()) == norm
+        for turn in history or []
+    )
+
+
 _CHUNK_CAP_CHARS = 700  # ~175 tokens; keeps head+tail of each retrieved chunk
 
 
@@ -679,14 +688,21 @@ class AnswerGenerator:
 
         if intent is None:
             # LLM failed — degrade to the old code path so the user still gets an answer.
-            answer, meta = self._answer_legacy(session, query, t0)
+            answer, meta = self._answer_legacy(session, query, t0, history=history)
             meta.t_history_ms = t_history_ms
             meta.t_intent_ms = t_intent_ms
             return answer, meta
 
-        # 1) FAQ match takes precedence
+        # 1) FAQ match takes precedence — unless that very answer is already in
+        # the dialog: a follow-up mapped to the same entry would get it again
+        # word for word («зачем мне одно и то же сообщение?»).
+        entry = None
         if intent.faq_match_id is not None and self.faq_matcher:
             entry = self.faq_matcher._entries[intent.faq_match_id]
+            if _already_answered(entry.answer, history):
+                logger.info("[faq] entry #%s is already in the dialog — answering via %s", intent.faq_match_id, intent.intent)
+                entry = None
+        if entry is not None:
             meta = AnswerMeta(query_type="FAQ_EXACT", top_score=1.0)
             meta.t_history_ms = t_history_ms
             meta.t_intent_ms = t_intent_ms
@@ -727,11 +743,13 @@ class AnswerGenerator:
         )
         return answer, meta
 
-    def _answer_legacy(self, session: Session, query: str, t0: float) -> tuple[str, AnswerMeta]:
+    def _answer_legacy(
+        self, session: Session, query: str, t0: float, history: list[dict] | None = None,
+    ) -> tuple[str, AnswerMeta]:
         """Fallback path used when the LLM intent extractor errors out."""
         if self.faq_matcher:
             match = self.faq_matcher.find(query)
-            if match:
+            if match and not _already_answered(match.answer, history):
                 meta = AnswerMeta(query_type="FAQ_EXACT", top_score=match.score)
                 meta.latency_ms = int((time.monotonic() - t0) * 1000)
                 return match.answer, meta

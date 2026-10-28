@@ -154,6 +154,7 @@ OPERATOR_PHRASES = [
     "позовите менеджера", "свяжите с сотрудником", "переключите на поддержку", "хочу в техподдержку",
     "хочу написать в поддержку", "позвоните мне", "с кем можно поговорить?", "это бот? дайте человека",
     "свяжите с продавцом", "дайте оператора", "хочу поговорить с менеджером", "оператора!", "Менеджера?", "поддержка",
+    "специалист", "Специалиста", "«специалист»", "позовите специалиста",
     "Хочу купить Русь-12 с баком, позвоните мне пожалуйста по номеру +7 900 000-00-00, удобно после 18",
 ]
 NOT_OPERATOR_PHRASES = [
@@ -339,8 +340,8 @@ def test_intent_needs_human_hands_off_instead_of_answering(env):
 
     gen.answer_with_meta = answer_with_meta
     # Nothing for layer 1 to catch (no staff nouns, no order words) — only Haiku reads the frustration.
-    text = "Третий раз задаю вопрос и получаю ерунду, сколько это будет продолжаться?"
-    assert not svc.is_operator_request(text) and not svc.is_personal_order(text)
+    text = "Третий раз задаю вопрос, сколько это будет продолжаться?"
+    assert svc.escalation_reason(text) is None
     run(event(**{"data.message.text": text}))
     c = calls()
     # the generated answer is dropped: transfer → handoff text only
@@ -524,3 +525,154 @@ def test_employee_writing_in_the_open_line_is_not_transferred(env):
     # the employee answers inside the Open Line — the dialog is already theirs
     run(event(**{"data.message.text": "Добрый день, чем помочь?", "data.user.id": "1", "data.user.connector": "0"}))
     assert calls() == [] and sessions.get_status(19167) == STATUS_OPERATOR
+
+
+# ── Wazzup lines: a text hint instead of the button ──────────────────────
+
+WZ_LINE = "wz_max_connec1fe2d3c4e|19|5b1c2d3e-aaaa-bbbb-cccc-0123456789ab|2577"
+
+
+def wz_event(line="19", **overrides) -> B24Event:
+    return event(**{"data.chat.entityId": WZ_LINE.replace("|19|", f"|{line}|"), **overrides})
+
+
+def test_wazzup_line_gets_text_hint_instead_of_button(env):
+    run(wz_event())
+    [send] = calls()
+    assert send[3] == "[b]Русь-12 Л[/b] подойдёт\nhttps://teplodar.ru/x_y/\n\n" + svc.OPERATOR_HINT
+    assert send[4] is None
+    # what the hint asks for works
+    assert svc.escalation_reason("специалист") == svc.REASON_REQUESTED
+
+
+def test_fallback_on_wazzup_line_also_carries_the_hint(env):
+    env["gen"].fail = True
+    run(wz_event())
+    [send] = calls()
+    assert send[3] == svc.FALLBACK_TEXT + "\n\n" + svc.OPERATOR_HINT and send[4] is None
+
+
+def test_quoted_bot_answer_is_not_the_clients_words():
+    # a reply quoting the bot's answer quotes its hint too
+    quoted = f">>Котёл подойдёт. {svc.OPERATOR_HINT}\n \n \nа сколько стоит доставка в Уфу?"
+    assert svc.escalation_reason(quoted) is None
+    assert svc.escalation_reason(">>Котёл подойдёт.\n \n \nпозовите специалиста") == svc.REASON_REQUESTED
+
+
+# ── complaints about the bot → human ─────────────────────────────────────
+
+BOT_COMPLAINTS = [
+    "там какой-то робот отписками бестолковыми со мной общается",
+    "Это робот отвечает чтоли зачем мне одно и тоже сообщение в ответ",
+    "Ясно переписываюсь с ботом.", "Вы меня не поняли", "вы не поняли вопрос",
+    "какую-то ерунду отвечаете", "вы не понимаете что я спрашиваю",
+]
+NOT_BOT_COMPLAINTS = [
+    "работает ли котёл без электричества?", "магазин на улице Ботанической есть?",
+    "я не понял, а цена какая?", "подойдёт ли дверца от Практика 14?",
+]
+
+
+@pytest.mark.parametrize("text", BOT_COMPLAINTS)
+def test_bot_complaint_goes_straight_to_operator(env, text):
+    assert svc.escalation_reason(text) in (svc.REASON_COMPLAINT, svc.REASON_REQUESTED)
+    run(wz_event(**{"data.message.text": text}))
+    assert env["gen"].calls == []
+    assert calls() == [("send", 511, "chat19167", svc.TRANSFER_TEXT, None), ("operator", 19167)]
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+
+
+@pytest.mark.parametrize("text", NOT_BOT_COMPLAINTS)
+def test_not_a_bot_complaint(text):
+    assert svc.escalation_reason(text) is None
+
+
+def answer_with(env, html, **meta):
+    gen = env["gen"]
+
+    def answer_with_meta(session, query, user_id=None, **kw):
+        gen.calls.append((query, user_id))
+        return html, SimpleNamespace(**{
+            "query_type": "RAG_PRODUCT", "top_score": 0.7, "chunks_used": 3, "city": None,
+            "reformulated_query": None, "t_intent_ms": None, "t_retrieval_ms": 1, "t_answer_ms": 1,
+            "t_answer_model": "sonnet", **meta,
+        })
+
+    gen.answer_with_meta = answer_with_meta
+
+
+def test_answer_promising_a_transfer_is_a_transfer(env):
+    # intent timed out (no needs_human), the answer prompt's complaint template kicked in
+    answer_with(env, "Мне жаль, что так получилось. Я переадресую вас на живого оператора: <b>8 800 101-43-53</b>")
+    run(wz_event(**{"data.message.text": "почему мне никто не отвечает уже неделю"}))
+    assert calls() == [("send", 511, "chat19167", svc.TRANSFER_TEXT, None), ("operator", 19167)]
+    assert [l["query_type"] for l in env["logged"]] == ["OPERATOR"]
+
+
+# ── «спасибо» / 👍 → no answer ────────────────────────────────────────────
+
+ACKS = [
+    "Спасибо", "Спасибо большое!)", "👍", "❤️", "Хорошо", "Понятно, спасибо.", "ок", "От души бро Спасибо",
+    "Обязательно🌸 прекрасного дня", ">>Отлично! Будем рады помочь с новым заказом в любое время. Обращайтесь!\n \n \n👍",
+    ">>Спасибо, и вам хороших выходных! 😊\n \n \n❤️\n>>Спасибо, и вам хороших выходных! 😊\n \n \n❤️",
+]
+NOT_ACKS = [
+    "Да", "Нет", "Спасибо, а сколько стоит доставка?", "Здравствуйте. Спасибо", "???",
+    "Хорошо сделаю на этой недели", ">>Отлично!\n \n \nа гарантия какая",
+]
+
+
+@pytest.mark.parametrize("text", ACKS)
+def test_acknowledgement(text):
+    assert svc.is_acknowledgement(text) and svc.escalation_reason(text) is None
+
+
+@pytest.mark.parametrize("text", NOT_ACKS)
+def test_not_acknowledgement(text):
+    assert not svc.is_acknowledgement(text)
+
+
+def test_thank_you_gets_no_answer(env):
+    run(wz_event(**{"data.message.text": "Спасибо большое!"}))
+    assert env["gen"].calls == [] and calls() == [] and env["logged"] == []
+    assert sessions.get_status(19167) == STATUS_BOT
+
+
+def test_thank_you_with_a_question_in_the_burst_is_answered(env):
+    run(
+        wz_event(**{"data.message.id": "1", "data.message.text": "Спасибо"}),
+        wz_event(**{"data.message.id": "2", "data.message.text": "а доставка в Уфу сколько?"}),
+    )
+    assert env["gen"].calls[0][0] == "Спасибо\nа доставка в Уфу сколько?"
+    assert [c[0] for c in calls()] == ["send"]
+
+
+# ── the service engineer's own line ───────────────────────────────────────
+
+ENGINEER_ANSWER = (
+    "Пришлите фото и замеры детали сервисному инженеру Андрею: <b>8-999-303-09-27</b> "
+    "(WhatsApp/MAX, пн–пт 8:00–17:00 НСК)."
+)
+
+
+def test_engineer_line_hands_off_instead_of_sending_to_the_same_number(env, monkeypatch):
+    monkeypatch.setattr(svc.settings, "b24_engineer_lines", "19, 25")
+    answer_with(env, ENGINEER_ANSWER, query_type="FAQ_EXACT")
+    run(wz_event(line="19", **{"data.message.text": "Нужна жаровня для пеллетной горелки АПГ-25"}))
+    assert calls() == [("send", 511, "chat19167", svc.ENGINEER_TRANSFER_TEXT, None), ("operator", 19167)]
+    assert env["logged"][0]["answer"] == svc.ENGINEER_TRANSFER_TEXT
+    assert sessions.get_status(19167) == STATUS_OPERATOR
+
+
+def test_engineer_number_is_a_normal_answer_on_other_lines(env, monkeypatch):
+    monkeypatch.setattr(svc.settings, "b24_engineer_lines", "19,25")
+    answer_with(env, ENGINEER_ANSWER, query_type="FAQ_EXACT")
+    run(wz_event(line="15", **{"data.message.text": "Нужна жаровня для пеллетной горелки АПГ-25"}))
+    [send] = calls()
+    assert "8-999-303-09-27" in send[3] and sessions.get_status(19167) == STATUS_BOT
+
+
+def test_engineer_lines_unset_change_nothing(env):
+    answer_with(env, ENGINEER_ANSWER, query_type="FAQ_EXACT")
+    run(wz_event(line="19", **{"data.message.text": "Нужна жаровня для пеллетной горелки АПГ-25"}))
+    assert [c[0] for c in calls()] == ["send"] and sessions.get_status(19167) == STATUS_BOT
