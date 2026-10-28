@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # long after the last one and answer them together. Also the window for a
     # new session's JOINCHAT to arrive after its first message — keep it > 0.
     b24_debounce_seconds: float = Field(default=6.0)
+    # Open Line ids (comma-separated, e.g. "19,25") connected to the service
+    # engineer's own WhatsApp/Max number: there an answer sending the client to
+    # that number hands the dialog to the line instead. Empty = no such lines.
+    b24_engineer_lines: str = Field(default="")
 
     def __post_init__(self):
         """Ensure directories exist."""

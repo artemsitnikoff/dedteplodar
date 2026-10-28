@@ -140,6 +140,12 @@ class B24Event:
         return self.entity_type == ENTITY_TYPE_OPEN_LINES
 
     @property
+    def via_wazzup(self) -> bool:
+        """A WhatsApp/Max line run through Wazzup (``wz_<channel>_…|<line>|…``).
+        Wazzup relays text only: Bitrix24 keyboards never reach the client."""
+        return self.entity_id.startswith("wz_")
+
+    @property
     def is_outgoing_echo(self) -> bool:
         """A manager's message sent from the company phone, echoed by Wazzup as the client's."""
         return bool(_WZ_OUTGOING_RE.search(self.text))
